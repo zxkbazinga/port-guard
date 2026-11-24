@@ -92,6 +92,42 @@
 
 <section class="panel">
   <div class="section-head">
+    <h2>诱饵端口</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="诱饵端口">保存</button>
+    </div>
+  </div>
+  <p class="desc">ipkg 桥接网络只暴露 <strong>22200–22203</strong> 四个容器端口。请在爱快「端口映射」里把不用的 WAN 端口 DNAT 到本应用的 <strong>同网段 IP:22200–22203</strong>（例如 WAN 3389 → 容器 IP:22200）。任何连上来的公网 IP 都是扫描行为；窗口内命中不同诱饵端口达到阈值才动作，私网与白名单 IP 自动跳过。不依赖爱快连接表 API 或日志。</p>
+  <div class="form-grid">
+    <label class="check"><input type="checkbox" name="decoy_enabled" {{checked .Cfg.decoy_enabled}}> 启用诱饵端口监听</label>
+    <label class="full">诱饵端口（逗号分隔，ipkg 请用 22200–22203）<input name="decoy_ports" value="{{.Cfg.decoy_ports}}" placeholder="22200,22201,22202,22203"></label>
+    <label>命中几个不同端口才动作<input type="number" name="decoy_threshold" value="{{.Cfg.decoy_threshold}}" min="1"></label>
+    <label>统计窗口（秒）<input type="number" name="decoy_window_seconds" value="{{.Cfg.decoy_window_seconds}}" min="10"></label>
+    <label class="check"><input type="checkbox" name="decoy_ban_enabled" {{checked .Cfg.decoy_ban_enabled}}> 命中后封禁（不勾则仅记录告警）</label>
+    <label>封禁时长（分钟）<input type="number" name="decoy_ban_minutes" value="{{.Cfg.decoy_ban_minutes}}" min="1"></label>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-head">
+    <h2>转发代理</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="转发代理">保存</button>
+    </div>
+  </div>
+  <p class="desc">串联模式：爱快把外网端口映射到本应用 IP 的监听端口，由代理转发到内网服务。启用后请在「转发代理」菜单添加规则或从爱快映射导入。所有连接都过检测引擎，命中规则当场断开，不依赖爱快封禁 API。<strong>警告：</strong>启用后转发端口需要容器已映射（ipkg 默认映射 22300–22349），且 port-guard 故障时这些服务会中断。</p>
+  <div class="form-grid">
+    <label class="check"><input type="checkbox" name="proxy_enabled" {{checked .Cfg.proxy_enabled}}> 启用转发代理（默认关闭）</label>
+    <label>端口池起始<input type="number" name="proxy_port_start" value="{{.Cfg.proxy_port_start}}" min="22300" max="22349"></label>
+    <label>端口池结束<input type="number" name="proxy_port_end" value="{{.Cfg.proxy_port_end}}" min="22300" max="22349"></label>
+  </div>
+  <p class="hint">端口池是「从爱快映射导入」时给新规则分配监听端口的范围，须在容器已映射的 22300–22349 之内。改这里只影响新导入的规则，不影响已建的转发规则；每次导入从起始端口往后找空闲端口。</p>
+</section>
+
+<section class="panel">
+  <div class="section-head">
     <h2>检测阈值</h2>
     <div class="section-actions">
       <span class="save-feedback" hidden></span>

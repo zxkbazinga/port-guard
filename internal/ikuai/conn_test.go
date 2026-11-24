@@ -105,6 +105,40 @@ func TestConnectionsAllFail(t *testing.T) {
 	}
 }
 
+// TestConnectionsReportsAccessDenied 验证 V4 固件的 1003 错误被如实展示，
+// 而不是误报成“0 条有效连接”。
+func TestConnectionsReportsAccessDenied(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/Action/login":
+			_, _ = w.Write([]byte(`{"Result":"sess-abc"}`))
+		case "/Action/call":
+			_, _ = w.Write([]byte(`{"code":1003,"message":"Access denied"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	host, port := splitTestURL(t, srv.URL)
+
+	cfg := config.NewEphemeral(config.Ephemeral{
+		IKuaiHost: host, IKuaiPort: port, IKuaiUsername: "admin", IKuaiPassword: "pass", IKuaiTimeout: 2,
+	})
+	client := New(cfg, slog.Default())
+	_, err := client.Connections("")
+	if err == nil {
+		t.Fatal("期望返回错误")
+	}
+	if !strings.Contains(err.Error(), "1003") || !strings.Contains(err.Error(), "Access denied") {
+		t.Fatalf("错误应包含 1003 Access denied，实际：%v", err)
+	}
+	diag := client.ConnDiagnostic()
+	if !strings.Contains(diag.LastError, "1003") {
+		t.Fatalf("诊断应保留 1003 错误，实际：%+v", diag)
+	}
+}
+
 // TestConnVariantsPreferredFirst 验证用户配置的 func_name 排在最前。
 func TestConnVariantsPreferredFirst(t *testing.T) {
 	variants := connVariants("my_conn")

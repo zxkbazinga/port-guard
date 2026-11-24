@@ -106,3 +106,37 @@ func TestIsProtected(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyPortRangeClamp(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "range.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// 超物理上限的结束端口应被夹回上限。
+	c, err := New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Update(map[string]any{"proxy_port_start": 22300, "proxy_port_end": 40000}); err != nil {
+		t.Fatal(err)
+	}
+	start, end := c.ProxyPortRange()
+	if start != ProxyPortPhysicalMin || end != ProxyPortPhysicalMax {
+		t.Fatalf("期望端口池 [%d,%d]，实际 [%d,%d]", ProxyPortPhysicalMin, ProxyPortPhysicalMax, start, end)
+	}
+
+	// 在物理范围内的自定义区间应被保留。
+	c2, err := New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.Update(map[string]any{"proxy_port_start": 22310, "proxy_port_end": 22320}); err != nil {
+		t.Fatal(err)
+	}
+	start, end = c2.ProxyPortRange()
+	if start != 22310 || end != 22320 {
+		t.Fatalf("期望自定义端口池 [22310,22320]，实际 [%d,%d]", start, end)
+	}
+}

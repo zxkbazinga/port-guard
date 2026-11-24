@@ -34,6 +34,18 @@ type Port struct {
 	UpdatedAt    int64  `json:"updated_at"`
 }
 
+// Forward 是一条 TCP 转发规则（代理模式）：监听本机端口，转发到内网后端。
+type Forward struct {
+	ID          int64  `json:"id"`
+	ListenPort  int    `json:"listen_port"`
+	BackendIP   string `json:"backend_ip"`
+	BackendPort int    `json:"backend_port"`
+	Protocol    string `json:"protocol"`
+	Label       string `json:"label"`
+	Enabled     bool   `json:"enabled"`
+	UpdatedAt   int64  `json:"updated_at"`
+}
+
 // Event 是一条检测/封禁事件。
 type Event struct {
 	ID       int64  `json:"id"`
@@ -87,6 +99,16 @@ CREATE TABLE IF NOT EXISTS events (
     reason TEXT DEFAULT '',
     detail TEXT DEFAULT '',
     action TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS forwards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listen_port INTEGER NOT NULL UNIQUE,
+    backend_ip TEXT NOT NULL,
+    backend_port INTEGER NOT NULL,
+    protocol TEXT DEFAULT 'tcp',
+    label TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 1,
+    updated_at INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_events_ip ON events(ip);
@@ -410,4 +432,72 @@ func (s *Store) ActiveBanCount() (int, error) {
 	var n int
 	err := s.db.QueryRow("SELECT COUNT(*) FROM bans WHERE active = 1 AND expires_at > ?", time.Now().Unix()).Scan(&n)
 	return n, err
+}
+
+// ------------------------------------------------------------- forwards --
+
+func (s *Store) ListForwards(enabledOnly bool) ([]Forward, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	query := "SELECT id, listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at FROM forwards"
+	if enabledOnly {
+		query += " WHERE enabled = 1"
+	}
+	query += " ORDER BY listen_port"
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Forward
+	for rows.Next() {
+		var f Forward
+		var enabled int
+		if err := rows.Scan(&f.ID, &f.ListenPort, &f.BackendIP, &f.BackendPort,
+			&f.Protocol, &f.Label, &enabled, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		f.Enabled = enabled == 1
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpsertForward(f Forward) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	enabled := 0
+	if f.Enabled {
+		enabled = 1
+	}
+	_, err := s.db.Exec(`
+INSERT INTO forwards(listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(listen_port) DO UPDATE SET
+    backend_ip = excluded.backend_ip,
+    backend_port = excluded.backend_port,
+    protocol = excluded.protocol,
+    label = excluded.label,
+    enabled = excluded.enabled,
+    updated_at = excluded.updated_at`,
+		f.ListenPort, f.BackendIP, f.BackendPort, f.Protocol, f.Label, enabled, time.Now().Unix())
+	return err
+}
+
+func (s *Store) DeleteForward(id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM forwards WHERE id = ?", id)
+	return err
+}
+
+func (s *Store) SetForwardEnabled(id int64, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := s.db.Exec("UPDATE forwards SET enabled = ?, updated_at = ? WHERE id = ?", v, time.Now().Unix(), id)
+	return err
 }

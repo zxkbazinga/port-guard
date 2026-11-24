@@ -59,6 +59,17 @@ type values struct {
 	LoginFailEnabled   bool `json:"login_fail_enabled"`
 	LoginFailThreshold int  `json:"login_fail_threshold"`
 	LoginFailWindow    int  `json:"login_fail_window_seconds"`
+	// 诱饵端口：由爱快 DNAT 把不用的端口转到本容器，连上来即视为扫描
+	DecoyEnabled    bool   `json:"decoy_enabled"`
+	DecoyPorts      string `json:"decoy_ports"`
+	DecoyThreshold  int    `json:"decoy_threshold"`
+	DecoyWindow     int    `json:"decoy_window_seconds"`
+	DecoyBanEnabled bool   `json:"decoy_ban_enabled"`
+	DecoyBanMinutes int    `json:"decoy_ban_minutes"`
+	// 串联代理模式：爱快把外网端口映射到本应用，由代理转发到内网服务
+	ProxyEnabled   bool `json:"proxy_enabled"`
+	ProxyPortStart int  `json:"proxy_port_start"` // 代理监听端口池起始（须在 compose 暴露范围内）
+	ProxyPortEnd   int  `json:"proxy_port_end"`   // 代理监听端口池结束
 }
 
 func defaults() values {
@@ -76,8 +87,20 @@ func defaults() values {
 		ConnRateThreshold: 60, UDPFloodThreshold: 80, AlertCooldown: 300,
 		EventRetentionDays: 3,
 		LoginFailEnabled:   true, LoginFailThreshold: 3, LoginFailWindow: 300,
+		// 默认关闭；ipkg bridge 网络只暴露 22200-22203 四个容器端口，需在爱快做 DNAT
+		DecoyEnabled: false, DecoyPorts: "22200,22201,22202,22203", DecoyThreshold: 2, DecoyWindow: 60,
+		DecoyBanEnabled: false, DecoyBanMinutes: 1,
+		ProxyEnabled: false, ProxyPortStart: ProxyPortPhysicalMin, ProxyPortEnd: ProxyPortPhysicalMax,
 	}
 }
+
+// 代理监听端口池的物理边界：必须与 ikuai-support/port-guard/app/docker-compose.yaml
+// 中 ${HOST_IP}:22300-22349:22300-22349/tcp 暴露的范围一致。bridge 网络下容器
+// 只能监听已暴露端口，配置页可在此范围内调整实际使用的起止端口。
+const (
+	ProxyPortPhysicalMin = 22300
+	ProxyPortPhysicalMax = 22349
+)
 
 // New 加载配置。数据库中缺失的项使用默认值，并应用环境变量覆盖。
 func New(s *store.Store) (*Config, error) {
@@ -163,6 +186,24 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.LoginFailThreshold)
 	case "login_fail_window_seconds":
 		get(raw, &v.LoginFailWindow)
+	case "decoy_enabled":
+		get(raw, &v.DecoyEnabled)
+	case "decoy_ports":
+		get(raw, &v.DecoyPorts)
+	case "decoy_threshold":
+		get(raw, &v.DecoyThreshold)
+	case "decoy_window_seconds":
+		get(raw, &v.DecoyWindow)
+	case "decoy_ban_enabled":
+		get(raw, &v.DecoyBanEnabled)
+	case "decoy_ban_minutes":
+		get(raw, &v.DecoyBanMinutes)
+	case "proxy_enabled":
+		get(raw, &v.ProxyEnabled)
+	case "proxy_port_start":
+		get(raw, &v.ProxyPortStart)
+	case "proxy_port_end":
+		get(raw, &v.ProxyPortEnd)
 	}
 }
 
@@ -193,6 +234,14 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_DETECTION_ENABLED": "detection_enabled", "PG_SNIFFER_ENABLED": "sniffer_enabled",
 		"PG_SYSLOG_ENABLED": "syslog_enabled", "PG_CONN_POLL_ENABLED": "conn_poll_enabled",
 		"PG_PORT_REFRESH_ENABLED": "port_refresh_enabled", "PG_LOGIN_FAIL_ENABLED": "login_fail_enabled",
+		"PG_DECOY_ENABLED":   "decoy_enabled",
+		"PG_DECOY_PORTS":     "decoy_ports",
+		"PG_DECOY_THRESHOLD": "decoy_threshold", "PG_DECOY_WINDOW": "decoy_window_seconds",
+		"PG_DECOY_BAN_ENABLED": "decoy_ban_enabled",
+		"PG_DECOY_BAN_MINUTES": "decoy_ban_minutes",
+		"PG_PROXY_ENABLED":     "proxy_enabled",
+		"PG_PROXY_PORT_START":  "proxy_port_start",
+		"PG_PROXY_PORT_END":    "proxy_port_end",
 	}
 	use := func(envName string) bool {
 		if v := os.Getenv(envName); v == "" {
@@ -214,6 +263,7 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_WHITELIST":      &c.c.Whitelist,
 		"PG_SNIFFER_IFACE":  &c.c.SnifferIface,
 		"PG_CONN_FUNC_NAME": &c.c.ConnFuncName,
+		"PG_DECOY_PORTS":    &c.c.DecoyPorts,
 	}
 	for k, p := range envStr {
 		if use(k) {
@@ -237,6 +287,11 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_WEB_SESSION_HOURS":     &c.c.WebSessionHours,
 		"PG_LOGIN_FAIL_THRESHOLD":  &c.c.LoginFailThreshold,
 		"PG_LOGIN_FAIL_WINDOW":     &c.c.LoginFailWindow,
+		"PG_DECOY_THRESHOLD":       &c.c.DecoyThreshold,
+		"PG_DECOY_WINDOW":          &c.c.DecoyWindow,
+		"PG_DECOY_BAN_MINUTES":     &c.c.DecoyBanMinutes,
+		"PG_PROXY_PORT_START":      &c.c.ProxyPortStart,
+		"PG_PROXY_PORT_END":        &c.c.ProxyPortEnd,
 	}
 	for k, p := range envInt {
 		if use(k) {
@@ -254,6 +309,9 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_CONN_POLL_ENABLED":    &c.c.ConnPollEnabled,
 		"PG_PORT_REFRESH_ENABLED": &c.c.PortRefresh,
 		"PG_LOGIN_FAIL_ENABLED":   &c.c.LoginFailEnabled,
+		"PG_DECOY_ENABLED":        &c.c.DecoyEnabled,
+		"PG_DECOY_BAN_ENABLED":    &c.c.DecoyBanEnabled,
+		"PG_PROXY_ENABLED":        &c.c.ProxyEnabled,
 	}
 	for k, p := range envBool {
 		if use(k) {
@@ -310,6 +368,25 @@ func (c *Config) normalize() {
 	// 日志保留至少 1 天，防止误填 0/负数导致清理逻辑异常
 	if c.c.EventRetentionDays < 1 {
 		c.c.EventRetentionDays = d.EventRetentionDays
+	}
+	if c.c.DecoyThreshold < 1 {
+		c.c.DecoyThreshold = d.DecoyThreshold
+	}
+	if c.c.DecoyWindow < 10 {
+		c.c.DecoyWindow = d.DecoyWindow
+	}
+	if c.c.DecoyBanMinutes < 1 {
+		c.c.DecoyBanMinutes = d.DecoyBanMinutes
+	}
+	// 代理端口池限制在 compose 已暴露的物理范围内，避免配置出容器监听不到的端口。
+	if c.c.ProxyPortStart < ProxyPortPhysicalMin || c.c.ProxyPortStart > ProxyPortPhysicalMax {
+		c.c.ProxyPortStart = d.ProxyPortStart
+	}
+	if c.c.ProxyPortEnd < c.c.ProxyPortStart || c.c.ProxyPortEnd > ProxyPortPhysicalMax {
+		c.c.ProxyPortEnd = d.ProxyPortEnd
+	}
+	if c.c.ProxyPortEnd < c.c.ProxyPortStart {
+		c.c.ProxyPortEnd = c.c.ProxyPortStart
 	}
 }
 
@@ -405,6 +482,61 @@ func (c *Config) EventRetentionDays() int {
 	defer c.mu.RUnlock()
 	return c.c.EventRetentionDays
 }
+
+// DecoyPorts 解析逗号分隔的诱饵端口列表，忽略非法值并去重。
+func (c *Config) DecoyPorts() []int {
+	c.mu.RLock()
+	raw := c.c.DecoyPorts
+	c.mu.RUnlock()
+	seen := map[int]bool{}
+	out := make([]int, 0)
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		n, err := strconv.Atoi(item)
+		if err != nil || n < 1 || n > 65535 || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+func (c *Config) DecoyEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.DecoyEnabled
+}
+func (c *Config) DecoyThreshold() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.DecoyThreshold
+}
+func (c *Config) DecoyWindow() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.DecoyWindow
+}
+func (c *Config) DecoyBanEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.DecoyBanEnabled
+}
+func (c *Config) DecoyBanMinutes() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.DecoyBanMinutes
+}
+
+func (c *Config) ProxyEnabled() bool { c.mu.RLock(); defer c.mu.RUnlock(); return c.c.ProxyEnabled }
+
+// ProxyPortRange 返回当前配置的代理监听端口池范围 [start, end]。
+func (c *Config) ProxyPortRange() (int, int) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.ProxyPortStart, c.c.ProxyPortEnd
+}
+
 func (c *Config) WebUsername() string { c.mu.RLock(); defer c.mu.RUnlock(); return c.c.WebUsername }
 func (c *Config) WebPasswordHash() string {
 	c.mu.RLock()
@@ -422,6 +554,8 @@ type Thresholds struct {
 	Window, SynFlood, PortScan, ConnRate, UDPFlood, Cooldown int
 	LoginFail, LoginFailWindow                               int
 	LoginFailEnabled                                         bool
+	DecoyEnabled, DecoyBanEnabled                            bool
+	DecoyThreshold, DecoyWindow, DecoyBanMinutes             int
 }
 
 func (c *Config) Thresholds() Thresholds {
@@ -433,6 +567,9 @@ func (c *Config) Thresholds() Thresholds {
 		UDPFlood: c.c.UDPFloodThreshold, Cooldown: c.c.AlertCooldown,
 		LoginFail: c.c.LoginFailThreshold, LoginFailWindow: c.c.LoginFailWindow,
 		LoginFailEnabled: c.c.LoginFailEnabled,
+		DecoyEnabled:     c.c.DecoyEnabled, DecoyBanEnabled: c.c.DecoyBanEnabled,
+		DecoyThreshold: c.c.DecoyThreshold,
+		DecoyWindow:    c.c.DecoyWindow, DecoyBanMinutes: c.c.DecoyBanMinutes,
 	}
 }
 

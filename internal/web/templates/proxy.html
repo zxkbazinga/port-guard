@@ -1,0 +1,130 @@
+{{define "proxy.html"}}{{template "header" .}}
+{{with .}}
+<div class="page-head">
+  <h1>转发代理</h1>
+  <div class="head-actions">
+    <button class="btn small" onclick="importForwards()">↻ 从爱快映射导入</button>
+    <button class="primary small" onclick="showFwdModal()">+ 添加转发规则</button>
+  </div>
+</div>
+
+<section class="panel">
+  <p class="desc">串联模式：爱快把外网端口映射到本应用 IP 的「监听端口」，代理把连接转发到「后端地址」。所有连接都经过检测引擎，命中规则时在 accept 阶段当场断开，<strong>不依赖爱快封禁 API</strong>。默认关闭，需在「系统配置 → 转发代理」中启用。</p>
+  <p class="desc">状态：{{if .Proxy.running}}<span class="badge green">运行中 · {{len .Proxy.ports}} 条监听</span>{{else}}<span class="badge gray">未运行</span>{{end}} · 累计连接 {{.Proxy.total}} · 拦截 {{.Proxy.blocked}} · 当前活动 {{.Proxy.active}}</p>
+  <p class="desc">「从爱快映射导入」会复用已同步的映射：后端地址/端口/备注自动带出，监听端口从 <span class="mono">{{.PortStart}}–{{.PortEnd}}</span> 端口池自动分配（范围在系统配置里可调）。导入后须到爱快把对应映射的「内网目标」改成 <span class="mono">本应用IP : 监听端口</span>，否则流量仍直连后端、不经过代理。导入不会自动修改爱快映射（避免改错断网）。</p>
+{{if .Forwards}}
+<table class="table">
+  <thead><tr><th>监听端口</th><th>后端地址</th><th>协议</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
+  <tbody>
+  {{range .Forwards}}
+    <tr>
+      <td class="mono">{{.ListenPort}}</td>
+      <td class="mono">{{.BackendIP}}:{{.BackendPort}}</td>
+      <td>{{.Protocol}}</td>
+      <td>{{if .Label}}{{.Label}}{{else}}-{{end}}</td>
+      <td><span class="badge {{if .Enabled}}green{{else}}gray{{end}}">{{if .Enabled}}启用{{else}}停用{{end}}</span></td>
+      <td>
+        <button class="btn small" onclick="toggleFwd({{.ID}})">{{if .Enabled}}停用{{else}}启用{{end}}</button>
+        <button class="btn small" onclick="deleteFwd({{.ID}})">删除</button>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="empty">暂无转发规则。添加规则并在系统配置中启用代理后生效。</p>{{end}}
+</section>
+
+{{if .Proxy.records}}
+<section class="panel">
+  <h2>最近连接</h2>
+  <table class="table">
+    <thead><tr><th>时间</th><th>来源 IP</th><th>监听</th><th>后端</th><th>动作</th><th>耗时</th></tr></thead>
+    <tbody>
+    {{range .Proxy.records}}
+      <tr><td class="nowrap">{{.Time}}</td><td class="mono">{{.IP}}</td><td class="mono">{{.Listen}}</td>
+      <td class="mono">{{.Backend}}</td><td>{{.Action}}</td><td>{{.Duration}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+
+<div id="fwdModal" class="modal" style="display:none">
+  <div class="modal-card">
+    <h2>添加转发规则</h2>
+    <label>监听端口（爱快映射到此端口）<input id="fwdListen" type="number" min="1" max="65535" placeholder="2222"></label>
+    <label>后端内网 IP<input id="fwdIP" placeholder="192.168.1.100"></label>
+    <label>后端端口<input id="fwdPort" type="number" min="1" max="65535" placeholder="22"></label>
+    <label>备注（可选）<input id="fwdLabel" placeholder="例如：群晖 SSH"></label>
+    <div class="modal-actions">
+      <button class="btn" onclick="hideFwdModal()">取消</button>
+      <button class="primary" onclick="submitFwd()">确认添加</button>
+    </div>
+    <p id="fwdResult" class="hint"></p>
+  </div>
+</div>
+
+<div id="importModal" class="modal" style="display:none">
+  <div class="modal-card">
+    <h2>导入结果</h2>
+    <p id="importSummary" class="hint"></p>
+    <div id="importList"></div>
+    <p class="hint">修改方法：爱快 → 端口映射 → 编辑对应规则 → 把「内网地址」改成本应用所在 IP，「内网端口」改成上表监听端口，外网端口保持不变。</p>
+    <div class="modal-actions">
+      <button class="primary" onclick="hideImportModal();location.reload()">完成</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function showFwdModal(){document.getElementById('fwdModal').style.display='flex'}
+function hideFwdModal(){document.getElementById('fwdModal').style.display='none'}
+async function submitFwd(){
+  const listen=parseInt(document.getElementById('fwdListen').value);
+  const port=parseInt(document.getElementById('fwdPort').value);
+  const ip=document.getElementById('fwdIP').value.trim();
+  if(!listen||listen<1||listen>65535){document.getElementById('fwdResult').textContent='请输入有效的监听端口';return}
+  if(!port||port<1||port>65535){document.getElementById('fwdResult').textContent='请输入有效的后端端口';return}
+  const body={listen_port:listen,backend_ip:ip,backend_port:port,protocol:'tcp',label:document.getElementById('fwdLabel').value.trim()};
+  const res=await fetch('/api/forwards',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const data=await res.json();
+  if(res.ok){location.reload()}else{document.getElementById('fwdResult').textContent=data.error||'添加失败'}
+}
+function escHtml(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
+function hideImportModal(){document.getElementById('importModal').style.display='none'}
+async function importForwards(){
+  if(!confirm('从已同步的爱快映射生成转发规则？后端地址会自动带出，监听端口自动分配。'))return;
+  const res=await fetch('/api/forwards/import',{method:'POST'});
+  const data=await res.json();
+  if(!res.ok){alert(data.error||'导入失败');return}
+  const items=data.items||[];
+  let summary='已生成 '+data.imported+' 条转发规则。';
+  if(data.pool_exhausted)summary+=' 端口池（{{.PortStart}}–{{.PortEnd}}）已用完，部分映射未导入，可在系统配置里调大范围。';
+  if(data.imported===0)summary+=' 没有可导入的新映射（可能已全部导入，或尚未同步爱快端口）。';
+  document.getElementById('importSummary').textContent=summary;
+  let html='';
+  if(items.length){
+    html='<table class="table"><thead><tr><th>外网端口</th><th>改为监听</th><th>后端（保持不变）</th><th>备注</th></tr></thead><tbody>';
+    for(const it of items){
+      html+='<tr><td class="mono">'+escHtml(it.external_port)+'</td>'
+        +'<td class="mono">'+escHtml(it.listen_port)+'</td>'
+        +'<td class="mono">'+escHtml(it.backend_ip)+':'+escHtml(it.backend_port)+'</td>'
+        +'<td>'+escHtml(it.label||'-')+'</td></tr>';
+    }
+    html+='</tbody></table>';
+  }
+  document.getElementById('importList').innerHTML=html;
+  document.getElementById('importModal').style.display='flex';
+}
+async function toggleFwd(id){
+  const res=await fetch('/api/forwards/'+id+'/toggle',{method:'POST'});
+  if(res.ok){location.reload()}else{alert('操作失败')}
+}
+async function deleteFwd(id){
+  if(!confirm('确认删除该转发规则？'))return;
+  const res=await fetch('/api/forwards/'+id,{method:'DELETE'});
+  if(res.ok){location.reload()}else{alert('删除失败')}
+}
+</script>
+{{end}}
+{{template "footer" .}}{{end}}

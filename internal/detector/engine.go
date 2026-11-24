@@ -7,6 +7,7 @@ package detector
 import (
 	"container/list"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ const (
 	KindConn                  // 来自爱快连接表的新建连接
 	KindSyslog                // 来自爱快安全日志的告警
 	KindLoginFail             // 来自 NAS / Windows / Ubuntu 的登录失败日志
+	KindDecoy                 // 命中诱饵端口（由爱快 DNAT 转到本容器）
 )
 
 // Observation 是一次观测。
@@ -45,6 +47,8 @@ type Alert struct {
 	Reason   string
 	Detail   string
 	Evidence string
+	Minutes  int  // 自定义封禁时长；0 表示使用全局封禁时长
+	NoBan    bool // 仅记录事件，不调用爱快封禁（诱饵端口默认只告警）
 }
 
 // ipState 保存单个源 IP 的滑动窗口数据。
@@ -104,7 +108,9 @@ func (e *Engine) Feed(o Observation) bool {
 	}
 
 	// 端口映射过滤：只有发往映射端口的流量才计入（日志类事件除外）
-	if o.Kind != KindSyslog && o.Kind != KindLoginFail && len(e.known) > 0 && !e.known[o.Port] {
+	// 代理模式下所有连接都经过代理，不需要映射端口白名单过滤
+	proxyBypass := o.Kind == KindConn && e.cfg.ProxyEnabled()
+	if o.Kind != KindSyslog && o.Kind != KindLoginFail && o.Kind != KindDecoy && !proxyBypass && len(e.known) > 0 && !e.known[o.Port] {
 		return false
 	}
 
@@ -135,7 +141,11 @@ func (e *Engine) Feed(o Observation) bool {
 // evaluate 在持锁状态下检查四条规则。返回优先级最高的命中告警。
 func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Thresholds) *Alert {
 	now := o.TS
-	cutoff := now.Add(-time.Duration(th.Window) * time.Second)
+	window := th.Window
+	if th.DecoyEnabled && th.DecoyWindow > window {
+		window = th.DecoyWindow
+	}
+	cutoff := now.Add(-time.Duration(window) * time.Second)
 
 	// 清理窗口外的数据
 	for front := state.hits.Front(); front != nil; front = state.hits.Front() {
@@ -157,6 +167,7 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 
 	var result *Alert
 	synOnPort, udpCount, connCount, loginFails := 0, 0, 0, 0
+	decoyPorts := map[int]bool{}
 	for node := state.hits.Front(); node != nil; node = node.Next() {
 		h := node.Value.(hit)
 		switch h.kind {
@@ -168,6 +179,8 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 			udpCount++
 		case KindConn:
 			connCount++
+		case KindDecoy:
+			decoyPorts[h.port] = true
 		}
 	}
 
@@ -192,6 +205,24 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 		result = &Alert{IP: ip, Port: o.Port, Proto: o.Proto, Rule: "login_brute",
 			Reason: "登录爆破行为", Detail: "短时间内多次登录失败",
 			Evidence: "failed=" + strconv.Itoa(loginFails) + "/" + strconv.Itoa(th.LoginFail)}
+	case o.Kind == KindDecoy && th.DecoyEnabled && len(decoyPorts) >= th.DecoyThreshold:
+		ports := make([]int, 0, len(decoyPorts))
+		for p := range decoyPorts {
+			ports = append(ports, p)
+		}
+		sort.Ints(ports)
+		labels := make([]string, 0, len(ports))
+		for _, p := range ports {
+			labels = append(labels, strconv.Itoa(p))
+		}
+		reason := "命中诱饵端口"
+		if !th.DecoyBanEnabled {
+			reason += "（仅告警）"
+		}
+		result = &Alert{IP: ip, Port: o.Port, Proto: "tcp", Rule: "decoy_hit",
+			Reason: reason, Detail: "访问了未部署任何服务的诱饵端口",
+			Evidence: "decoy_ports=" + strings.Join(labels, ","), Minutes: th.DecoyBanMinutes,
+			NoBan: !th.DecoyBanEnabled}
 	case o.Kind == KindSYN && synOnPort >= th.SynFlood:
 		result = &Alert{IP: ip, Port: o.Port, Proto: "tcp", Rule: "syn_flood",
 			Reason: "SYN Flood 攻击", Detail: "窗口内对同一端口的 SYN 数量异常",

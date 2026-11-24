@@ -255,6 +255,47 @@ func apiOK(data json.RawMessage) bool {
 	return true
 }
 
+// apiError 提取爱快响应里的业务错误。V4 固件对不存在的模块统一返回
+// {"code":1003,"message":"Access denied"}，仅看 Rows 会误报成“0 条有效连接”。
+func apiError(data json.RawMessage) string {
+	var obj map[string]any
+	if json.Unmarshal(data, &obj) != nil {
+		return ""
+	}
+	lookup := func(names ...string) any {
+		for k, v := range obj {
+			for _, name := range names {
+				if strings.EqualFold(k, name) {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+	code := lookup("code", "errcode", "errno", "ret")
+	if code == nil {
+		code = lookup("Result")
+	}
+	msg := str(lookup("message", "msg", "errmsg", "ErrMsg", "error"))
+	if code == nil {
+		return ""
+	}
+	switch v := code.(type) {
+	case float64:
+		if v == 0 || v == 10000 || v == 30000 {
+			return ""
+		}
+	case string:
+		if v == "" || v == "0" || strings.EqualFold(v, "success") {
+			return ""
+		}
+	}
+	if msg == "" {
+		msg = "无错误信息"
+	}
+	return fmt.Sprintf("code=%v %s", code, msg)
+}
+
 // extractRows 从各种响应形态中提取数组字段。
 func extractRows(data json.RawMessage, keys ...string) []map[string]any {
 	var obj map[string]any
@@ -315,6 +356,13 @@ func str(v any) string {
 		return s
 	}
 	return fmt.Sprint(v)
+}
+
+func truncateSample(s string) string {
+	if len(s) > 200 {
+		return s[:200]
+	}
+	return s
 }
 
 // PortMappings 拉取端口映射规则。
@@ -451,6 +499,14 @@ func (c *Client) Connections(funcName string) ([]Conn, error) {
 		if err != nil {
 			diag.Attempts = append(diag.Attempts, v.label()+": 调用失败 "+err.Error())
 			lastErr = err
+			continue
+		}
+		if errMsg := apiError(data); errMsg != "" {
+			diag.Attempts = append(diag.Attempts, v.label()+": "+errMsg)
+			if diag.Sample == "" {
+				diag.Sample = truncateSample(string(data))
+			}
+			lastErr = fmt.Errorf("%s: %s", v.label(), errMsg)
 			continue
 		}
 		rows := extractRows(data, "data", "result", "results")

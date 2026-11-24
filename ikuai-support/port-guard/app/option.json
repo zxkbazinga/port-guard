@@ -333,6 +333,121 @@
     "max": 86400
   },
   {
+    "attrname": "PG_DECOY_ENABLED",
+    "label": {
+      "en": "Enable decoy ports (1/0), DNAT unused WAN ports to container 22200-22203",
+      "zh": "启用诱饵端口（1/0），需在爱快把闲置 WAN 端口 DNAT 到容器 22200-22203"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 0,
+    "min": 0,
+    "max": 1
+  },
+  {
+    "attrname": "PG_DECOY_PORTS",
+    "label": {
+      "en": "Decoy container ports (comma separated, 22200-22203 in ipkg)",
+      "zh": "诱饵容器端口（逗号分隔，ipkg 用 22200-22203）"
+    },
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": "22200,22201,22202,22203"
+  },
+  {
+    "attrname": "PG_DECOY_THRESHOLD",
+    "label": {
+      "en": "Distinct decoy ports hit before action",
+      "zh": "命中几个不同诱饵端口才动作"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 2,
+    "min": 1,
+    "max": 100
+  },
+  {
+    "attrname": "PG_DECOY_WINDOW",
+    "label": {
+      "en": "Decoy statistics window in seconds",
+      "zh": "诱饵端口统计窗口（秒）"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 60,
+    "min": 10,
+    "max": 3600
+  },
+  {
+    "attrname": "PG_DECOY_BAN_ENABLED",
+    "label": {
+      "en": "Ban on decoy hit (1/0), 0=alert only",
+      "zh": "命中诱饵后封禁（1/0，0=仅告警）"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 0,
+    "min": 0,
+    "max": 1
+  },
+  {
+    "attrname": "PG_DECOY_BAN_MINUTES",
+    "label": {
+      "en": "Decoy ban duration in minutes",
+      "zh": "诱饵端口命中后的封禁时长（分钟）"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 1,
+    "min": 1,
+    "max": 9999
+  },
+  {
+    "attrname": "PG_PROXY_ENABLED",
+    "label": {
+      "en": "Enable reverse proxy mode (1/0), default off",
+      "zh": "启用转发代理模式（1/0，默认关闭）"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 0,
+    "min": 0,
+    "max": 1
+  },
+  {
+    "attrname": "PG_PROXY_PORT_START",
+    "label": {
+      "en": "Proxy listen port pool start (22300-22349)",
+      "zh": "代理监听端口池起始（22300-22349）"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 22300,
+    "min": 22300,
+    "max": 22349
+  },
+  {
+    "attrname": "PG_PROXY_PORT_END",
+    "label": {
+      "en": "Proxy listen port pool end (22300-22349)",
+      "zh": "代理监听端口池结束（22300-22349）"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 22349,
+    "min": 22300,
+    "max": 22349
+  },
+  {
     "attrname": "APP_PORT_SYSLOG",
     "label": {
       "en": "Syslog UDP port (host)",

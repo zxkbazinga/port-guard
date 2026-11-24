@@ -14,10 +14,13 @@ import (
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
 	"github.com/zxkbazinga/port-guard/internal/ikuai"
+	"github.com/zxkbazinga/port-guard/internal/proxy"
 	"github.com/zxkbazinga/port-guard/internal/store"
 	"github.com/zxkbazinga/port-guard/internal/version"
 	"github.com/zxkbazinga/port-guard/internal/web"
 )
+
+const probePort = 22222 // 源 IP 验证端点，仅诊断用，不接检测引擎
 
 func main() {
 	listen := flag.String("listen", ":5657", "Web 管理界面监听地址")
@@ -72,10 +75,16 @@ func main() {
 	client := ikuai.New(cfg, logger)
 	manager := ban.New(cfg, logger, client, s)
 
-	// 检测引擎：告警回调 -> 封禁管理器
+	// 检测引擎：告警回调 -> 代理本地封禁（即时生效）+ 封禁管理器（调爱快 API）
+	// 代理本地封禁不依赖 ban_mode 探测结果，保证串联模式下当场断开攻击连接。
+	var proxyServer *proxy.Server
 	engine := detector.New(cfg, logger, func(a detector.Alert) {
+		if !a.NoBan && proxyServer != nil {
+			proxyServer.Block(a.IP, a.Minutes)
+		}
 		go manager.HandleAlert(a)
 	})
+	proxyServer = proxy.New(cfg, logger, engine, s)
 
 	// 从数据库加载端口集合
 	ports, _ := s.ListPorts(true)
@@ -87,6 +96,8 @@ func main() {
 
 	sniffer := detector.NewSniffer(cfg, logger, engine)
 	syslogd := detector.NewSyslogReceiver(cfg, logger, engine)
+	decoy := detector.NewDecoyListener(cfg, logger, engine)
+	probe := detector.NewSourceProbe(logger, probePort)
 	poller := detector.NewPoller(cfg, logger, engine, client, s)
 
 	// 启动各检测源；抓包在不支持的环境下失败只告警，不阻断启动
@@ -96,12 +107,22 @@ func main() {
 	if err := syslogd.Start(); err != nil {
 		logger.Warn("Syslog 接收不可用", "err", err)
 	}
+	if err := decoy.Start(); err != nil {
+		logger.Warn("诱饵端口监听不可用", "err", err)
+	}
+	if err := probe.Start(); err != nil {
+		logger.Warn("源 IP 探测端点不可用", "err", err)
+	}
+	if err := proxyServer.Reload(); err != nil {
+		logger.Warn("代理转发启动失败", "err", err)
+	}
 	poller.Start()
 	manager.Start()
 
 	webServer, err := web.NewServer(web.Components{
 		Cfg: cfg, Store: s, Client: client, Engine: engine,
-		Sniffer: sniffer, Syslog: syslogd, Poller: poller, Bans: manager, Log: logger,
+		Sniffer: sniffer, Syslog: syslogd, Decoy: decoy, Probe: probe, Proxy: proxyServer,
+		Poller: poller, Bans: manager, Log: logger,
 	})
 	if err != nil {
 		logger.Error("初始化 Web 服务失败", "err", err)
@@ -156,6 +177,9 @@ func main() {
 	manager.Stop()
 	poller.Stop()
 	syslogd.Stop()
+	proxyServer.Stop()
+	decoy.Stop()
+	probe.Stop()
 	sniffer.Stop()
 	logger.Info("Port Guard 已退出")
 }

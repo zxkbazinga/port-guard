@@ -44,11 +44,21 @@ func (m *Manager) HandleAlert(a detector.Alert) {
 		m.log.Debug("告警 IP 在保护名单中，跳过封禁", "ip", a.IP)
 		return
 	}
+	if a.NoBan {
+		_ = m.store.AddEvent(store.Event{
+			Type: "attack", IP: a.IP, Port: a.Port, Protocol: a.Proto,
+			Reason: a.Reason, Detail: a.Evidence, Action: "仅告警，未封禁",
+		})
+		return
+	}
 	if existing, _ := m.store.GetBan(a.IP); existing != nil && existing.Active && existing.ExpiresAt > time.Now().Unix() {
 		m.log.Debug("IP 已在封禁中，跳过重复封禁", "ip", a.IP)
 		return
 	}
-	minutes := m.cfg.BanMinutes()
+	minutes := a.Minutes
+	if minutes <= 0 {
+		minutes = m.cfg.BanMinutes()
+	}
 	ruleID, err := m.client.Ban(a.IP, minutes, a.Reason)
 	if err != nil {
 		m.failed.Add(1)
