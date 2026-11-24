@@ -17,6 +17,8 @@ STAGING_PKG="$STAGING_ROOT/port-guard"
 
 rm -rf "$STAGING_ROOT"
 mkdir -p "$STAGING_PKG" "$OUTPUT_DIR"
+# tar 在子 shell 中会 cd 到 staging 目录，输出路径必须先转成绝对路径
+OUTPUT_DIR=$(CDPATH= cd "$OUTPUT_DIR" && pwd)
 cp -R "$PACKAGE_SRC"/. "$STAGING_PKG"/
 find "$STAGING_PKG" -name .gitkeep -delete
 rm -f "$STAGING_PKG/ui/ico/README.md"
