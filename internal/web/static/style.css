@@ -43,6 +43,8 @@ a{color:var(--primary);text-decoration:none}
 .kv{width:100%;font-size:13px}
 .kv td{padding:7px 4px;border-bottom:1px solid #f0f1f3}
 .kv td:first-child{color:var(--muted);width:45%}
+.kv .diag-error{color:#b91c1c;font-size:12px;word-break:break-all}
+.kv .diag-ok{color:#15803d;font-size:12px;word-break:break-all}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
 .dot.green{background:var(--green)}.dot.gray{background:#cbd5e1}
 .badge{display:inline-block;padding:2px 9px;border-radius:12px;font-size:12px}

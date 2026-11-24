@@ -20,6 +20,10 @@
       <tr><td>Syslog 接收</td><td>{{if .Syslog.running}}<span class="dot green"></span> 监听中 · 已收 {{.Syslog.messages}} 条{{else}}<span class="dot gray"></span> 未启用{{end}}</td></tr>
       <tr><td>爱快 API 轮询</td><td>{{if .Poller.running}}<span class="dot green"></span> 运行中{{else}}<span class="dot gray"></span> 未启用{{end}} · 连接 {{.Poller.conns_polled}} 条</td></tr>
       <tr><td>端口映射同步</td><td>已同步 {{.Poller.ports_refreshed}} 次</td></tr>
+      {{with .Poller.conn_diag}}
+      {{if .LastError}}<tr><td>连接表诊断</td><td class="diag-error">未取到连接 · {{.LastError}}</td></tr>
+      {{else if .Variant}}<tr><td>连接表接口</td><td class="diag-ok">{{.Variant}} · 样本 {{.Sample}}</td></tr>{{end}}
+      {{end}}
     </table>
   </section>
   <section class="panel">

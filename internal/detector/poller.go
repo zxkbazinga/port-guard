@@ -136,5 +136,6 @@ func (p *Poller) Stats() map[string]any {
 		"running":         p.running.Load(),
 		"ports_refreshed": p.portsRefreshed.Load(),
 		"conns_polled":    p.connsPolled.Load(),
+		"conn_diag":       p.client.ConnDiagnostic(),
 	}
 }

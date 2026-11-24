@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/zxkbazinga/port-guard/internal/config"
+	"github.com/zxkbazinga/port-guard/internal/textutil"
 )
 
 // Mapping 是爱快端口映射（DNAT）规则。
@@ -56,6 +57,26 @@ type Client struct {
 	banMode      string // 探测出的封禁方式：blacklist / acl / none
 	probeTried   bool
 	probeVariant banVariant // 探测成功的参数形态
+
+	connTried   bool           // 连接表形态是否已探测
+	connVariant connVariant    // 探测成功的连接表形态
+	connDiag    ConnDiagnostic // 最近一次连接表拉取的诊断信息
+}
+
+// connVariant 是一种连接表 API 调用形态。
+// 爱快不同固件对连接表的 func_name / TYPE 支持不同，逐尝试直到拿到有效数据。
+type connVariant struct {
+	Func  string
+	Param map[string]any
+}
+
+// ConnDiagnostic 记录连接表拉取过程，供状态页展示，避免只在日志里可见。
+type ConnDiagnostic struct {
+	Variant   string   `json:"variant"`    // 当前使用的形态，如 "monitor_conn TYPE=total,data"
+	Attempts  []string `json:"attempts"`   // 每种形态的尝试结果
+	Sample    string   `json:"sample"`     // 拉到的一条连接样本，或失败时的响应片段
+	RowCount  int      `json:"row_count"`  // 本次拉到的连接条数
+	LastError string   `json:"last_error"` // 最后一次错误
 }
 
 func New(cfg *config.Config, log *slog.Logger) *Client {
@@ -330,9 +351,10 @@ func (c *Client) PortMappings() ([]Mapping, error) {
 		if proto != "udp" {
 			proto = "tcp"
 		}
-		comment := str(row["comment"])
+		// 爱快会把备注按 URL 转义保存（如 DSM%20SSH），同步时先还原再入库。
+		comment := textutil.DecodeURLEscaped(str(row["comment"]))
 		if comment == "" {
-			comment = str(row["tagname"])
+			comment = textutil.DecodeURLEscaped(str(row["tagname"]))
 		}
 		enabled := true
 		if v, ok := row["enabled"]; ok {
@@ -346,13 +368,39 @@ func (c *Client) PortMappings() ([]Mapping, error) {
 	return out, nil
 }
 
-// Connections 拉取活跃连接表（可选功能，取决于固件是否支持）。
-func (c *Client) Connections(funcName string) ([]Conn, error) {
-	data, err := c.Call(funcName, "show", map[string]any{"TYPE": "data", "limit": "0,2000"})
-	if err != nil {
-		return nil, err
+// connVariants 是连接表 API 的候选形态。爱快不同固件对这个接口的 func_name
+// 与 TYPE 参数支持不一致，逐个尝试直到拿到有效连接行，成功后缓存。
+// 用户配置里指定的 func_name 会被放到最前面优先尝试。
+func connVariants(preferred string) []connVariant {
+	funcs := []string{"monitor_conn", "conn", "monitor_nat", "flow_control"}
+	if preferred != "" {
+		funcs = append([]string{preferred}, funcs...)
 	}
-	rows := extractRows(data, "data", "result", "results")
+	types := []string{"total,data", "data", "total"}
+	seen := make(map[string]bool)
+	out := make([]connVariant, 0, len(funcs)*len(types))
+	for _, fn := range funcs {
+		for _, t := range types {
+			key := fn + "|" + t
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, connVariant{
+				Func:  fn,
+				Param: map[string]any{"TYPE": t, "limit": "0,2000"},
+			})
+		}
+	}
+	return out
+}
+
+func (v connVariant) label() string {
+	return v.Func + " TYPE=" + str(v.Param["TYPE"])
+}
+
+// parseConnRows 把 API 返回的行转成连接对象，兼容多种字段命名。
+func parseConnRows(rows []map[string]any) []Conn {
 	out := make([]Conn, 0, len(rows))
 	for _, row := range rows {
 		src := str(row["src_ip"])
@@ -379,5 +427,80 @@ func (c *Client) Connections(funcName string) ([]Conn, error) {
 		}
 		out = append(out, Conn{SrcIP: src, DstIP: dst, DstPort: port, Proto: proto})
 	}
-	return out, nil
+	return out
+}
+
+// Connections 拉取活跃连接表（可选功能，取决于固件是否支持）。
+// 会尝试多种 API 形态，成功后缓存可用形态；诊断信息可通过 ConnDiagnostic() 读取。
+func (c *Client) Connections(funcName string) ([]Conn, error) {
+	c.mu.Lock()
+	cached := c.connVariant
+	cachedOK := c.connTried && cached.Func != ""
+	c.mu.Unlock()
+
+	variants := connVariants(funcName)
+	if cachedOK {
+		// 已探测到可用形态：优先复用，失败时才重新探测
+		variants = append([]connVariant{cached}, variants...)
+	}
+
+	diag := ConnDiagnostic{Attempts: make([]string, 0, len(variants))}
+	var lastErr error
+	for _, v := range variants {
+		data, err := c.Call(v.Func, "show", v.Param)
+		if err != nil {
+			diag.Attempts = append(diag.Attempts, v.label()+": 调用失败 "+err.Error())
+			lastErr = err
+			continue
+		}
+		rows := extractRows(data, "data", "result", "results")
+		conns := parseConnRows(rows)
+		if len(conns) == 0 {
+			sample := string(data)
+			if len(sample) > 200 {
+				sample = sample[:200]
+			}
+			diag.Attempts = append(diag.Attempts, v.label()+": 无有效连接 (响应 "+sample+")")
+			lastErr = fmt.Errorf("%s 返回 0 条有效连接", v.label())
+			continue
+		}
+		// 成功：缓存形态、记录诊断
+		c.mu.Lock()
+		c.connTried = true
+		c.connVariant = v
+		c.mu.Unlock()
+		diag.Variant = v.label()
+		diag.RowCount = len(conns)
+		diag.Sample = fmt.Sprintf("src=%s dst=%s:%d proto=%s", conns[0].SrcIP, conns[0].DstIP, conns[0].DstPort, conns[0].Proto)
+		diag.LastError = ""
+		c.mu.Lock()
+		c.connDiag = diag
+		c.mu.Unlock()
+		return conns, nil
+	}
+	// 全部失败：把 API 原始响应片段留一份，便于诊断
+	if len(diag.Attempts) > 0 && diag.Sample == "" {
+		last := diag.Attempts[len(diag.Attempts)-1]
+		if i := strings.Index(last, "响应 "); i >= 0 {
+			diag.Sample = last[i+len("响应 "):]
+			if len(diag.Sample) > 200 {
+				diag.Sample = diag.Sample[:200]
+			}
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("无可用连接表形态")
+	}
+	diag.LastError = lastErr.Error()
+	c.mu.Lock()
+	c.connDiag = diag
+	c.mu.Unlock()
+	return nil, lastErr
+}
+
+// ConnDiagnostic 返回最近一次连接表拉取的诊断信息（供状态页展示）。
+func (c *Client) ConnDiagnostic() ConnDiagnostic {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connDiag
 }

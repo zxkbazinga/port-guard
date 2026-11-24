@@ -11,6 +11,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/zxkbazinga/port-guard/internal/textutil"
 )
 
 // Store 线程安全的数据库封装。
@@ -211,6 +213,10 @@ func (s *Store) ListPorts(enabledOnly bool) ([]Port, error) {
 			return nil, err
 		}
 		p.Enabled = enabled == 1
+		// 兼容旧数据：此前同步进来的备注可能是爱快的 URL 转义原文，展示前还原。
+		if p.Source == "ikuai" {
+			p.Label = textutil.DecodeURLEscaped(p.Label)
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
