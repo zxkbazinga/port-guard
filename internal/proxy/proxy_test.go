@@ -158,6 +158,17 @@ func TestRecordCapAndClear(t *testing.T) {
 	if got := len(p.Records(0)); got != 0 {
 		t.Fatalf("清空后应为 0 条，实际 %d", got)
 	}
+
+	id := p.record(start, "1.1.1.1", f, backend, "转发", 0)
+	rows := p.Records(1)
+	if len(rows) != 1 || rows[0].Duration != "连接中" {
+		t.Fatalf("连接建立时应立即显示「连接中」，实际 %+v", rows)
+	}
+	p.finishRecord(id, 1500*time.Millisecond)
+	rows = p.Records(1)
+	if len(rows) != 1 || rows[0].Duration != "1.5s" {
+		t.Fatalf("连接结束后应回填耗时，实际 %+v", rows)
+	}
 }
 
 func TestDisabledForwardNotListened(t *testing.T) {

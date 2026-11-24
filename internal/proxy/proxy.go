@@ -22,6 +22,7 @@ const maxConnRecords = 1000
 
 // ConnRecord 是一条最近连接记录。
 type ConnRecord struct {
+	ID       uint64 `json:"id"`
 	Time     string `json:"time"`
 	IP       string `json:"ip"`
 	Listen   int    `json:"listen"`
@@ -48,6 +49,7 @@ type Server struct {
 	blocked atomic.Uint64
 	active  atomic.Int64
 	bytes   atomic.Uint64
+	recSeq  atomic.Uint64
 }
 
 func New(cfg *config.Config, log *slog.Logger, eng *detector.Engine, s *store.Store) *Server {
@@ -217,6 +219,9 @@ func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Fo
 	p.active.Add(1)
 	defer p.active.Add(-1)
 
+	// 连接一建立就写日志，长连接（HTTPS/SSH）也能立刻在页面看到
+	recID := p.record(start, srcIP, f, backend, action, 0)
+
 	// NoDelay 减少小包延迟（SSH/RDP 交互场景）
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
@@ -245,22 +250,42 @@ func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Fo
 	go pump(upstream, conn)
 	go pump(conn, upstream)
 	wg.Wait()
-	p.record(start, srcIP, f, backend, action, time.Since(start))
+	p.finishRecord(recID, time.Since(start))
 }
 
-func (p *Server) record(start time.Time, ip string, f store.Forward, backend, action string, d time.Duration) {
+// record 立即写入一条日志并返回其 ID，便于连接关闭后回填耗时。
+func (p *Server) record(start time.Time, ip string, f store.Forward, backend, action string, d time.Duration) uint64 {
+	id := p.recSeq.Add(1)
+	duration := "连接中"
+	if d > 0 {
+		duration = d.Round(time.Millisecond).String()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.records = append([]ConnRecord{{
+		ID:       id,
 		Time:     start.Format("2006-01-02 15:04:05"),
 		IP:       ip,
 		Listen:   f.ListenPort,
 		Backend:  backend,
 		Action:   action,
-		Duration: d.Round(time.Millisecond).String(),
+		Duration: duration,
 	}}, p.records...)
 	if len(p.records) > maxConnRecords {
 		p.records = p.records[:maxConnRecords]
+	}
+	return id
+}
+
+// finishRecord 在连接结束后把「连接中」替换为真实耗时。
+func (p *Server) finishRecord(id uint64, d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.records {
+		if p.records[i].ID == id {
+			p.records[i].Duration = d.Round(time.Millisecond).String()
+			return
+		}
 	}
 }
 
