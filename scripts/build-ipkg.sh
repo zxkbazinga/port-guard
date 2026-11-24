@@ -21,6 +21,11 @@ cp -R "$PACKAGE_SRC"/. "$STAGING_PKG"/
 find "$STAGING_PKG" -name .gitkeep -delete
 rm -f "$STAGING_PKG/ui/ico/README.md"
 
+# Git 不跟踪空目录，CI 干净 checkout 时这些运行时目录可能不存在
+mkdir -p "$STAGING_PKG/app/bin" "$STAGING_PKG/app/data" \
+  "$STAGING_PKG/app/cache" "$STAGING_PKG/app/config" \
+  "$STAGING_PKG/log" "$STAGING_PKG/ui/ico"
+
 # 同步 manifest 版本号
 sed -e "s/\"version\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"version\": \"$VERSION\"/" \
   "$PACKAGE_SRC/manifest.json" > "$STAGING_PKG/manifest.json"

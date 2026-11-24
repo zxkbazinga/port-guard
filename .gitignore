@@ -1,13 +1,13 @@
-# 二进制与构建产物
-bin/
+# 二进制与构建产物（只忽略根目录，保留 ipkg 包内的 app/bin 占位目录）
+/bin/
 *.exe
 /port-guard
 dist/
 *.ipkg
 ikuai-support/.staging/
 
-# 运行时数据
-data/
+# 运行时数据（只忽略根目录，保留 ipkg 包内的 app/data 占位目录）
+/data/
 *.db
 *.db-shm
 *.db-wal
