@@ -3,7 +3,6 @@
 <div class="page-head">
   <h1>转发代理</h1>
   <div class="head-actions">
-    <button class="btn small" onclick="importForwards()">↻ 从爱快映射导入</button>
     <button class="primary small" onclick="showFwdModal()">+ 添加转发规则</button>
   </div>
 </div>
@@ -11,7 +10,7 @@
 <section class="panel">
   <p class="desc">串联模式：爱快把外网端口映射到本应用 IP 的「监听端口」，代理把连接转发到「后端地址」。所有连接都经过检测引擎，命中规则时在 accept 阶段当场断开，<strong>不依赖爱快封禁 API</strong>。默认关闭，需在「系统配置 → 转发代理」中启用。</p>
   <p class="desc">状态：{{if .Proxy.running}}<span class="badge green">运行中 · {{len .Proxy.ports}} 条监听</span>{{else}}<span class="badge gray">未运行</span>{{end}} · 累计连接 {{.Proxy.total}} · 拦截 {{.Proxy.blocked}} · 当前活动 {{.Proxy.active}}</p>
-  <p class="desc">「从爱快映射导入」会复用已同步的映射：后端地址/端口/备注自动带出，监听端口从 <span class="mono">{{.PortStart}}–{{.PortEnd}}</span> 端口池自动分配（范围在系统配置里可调）。导入后须到爱快把对应映射的「内网目标」改成 <span class="mono">本应用IP : 监听端口</span>，否则流量仍直连后端、不经过代理。导入不会自动修改爱快映射（避免改错断网）。</p>
+  <p class="desc">添加规则后，到爱快把对应服务的端口映射「内网目标」改成 <span class="mono">本应用IP : 监听端口</span>，外网端口保持不变，流量即经过代理。建议监听端口用 <span class="mono">{{.PortStart}}–{{.PortEnd}}</span> 范围内、且容器已映射的端口。</p>
 {{if .Forwards}}
 <table class="table">
   <thead><tr><th>监听端口</th><th>后端地址</th><th>协议</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
@@ -64,18 +63,6 @@
   </div>
 </div>
 
-<div id="importModal" class="modal" style="display:none">
-  <div class="modal-card">
-    <h2>导入结果</h2>
-    <p id="importSummary" class="hint"></p>
-    <div id="importList"></div>
-    <p class="hint">修改方法：爱快 → 端口映射 → 编辑对应规则 → 把「内网地址」改成本应用所在 IP，「内网端口」改成上表监听端口，外网端口保持不变。</p>
-    <div class="modal-actions">
-      <button class="primary" onclick="hideImportModal();location.reload()">完成</button>
-    </div>
-  </div>
-</div>
-
 <script>
 function showFwdModal(){document.getElementById('fwdModal').style.display='flex'}
 function hideFwdModal(){document.getElementById('fwdModal').style.display='none'}
@@ -89,32 +76,6 @@ async function submitFwd(){
   const res=await fetch('/api/forwards',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const data=await res.json();
   if(res.ok){location.reload()}else{document.getElementById('fwdResult').textContent=data.error||'添加失败'}
-}
-function escHtml(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
-function hideImportModal(){document.getElementById('importModal').style.display='none'}
-async function importForwards(){
-  if(!confirm('从已同步的爱快映射生成转发规则？后端地址会自动带出，监听端口自动分配。'))return;
-  const res=await fetch('/api/forwards/import',{method:'POST'});
-  const data=await res.json();
-  if(!res.ok){alert(data.error||'导入失败');return}
-  const items=data.items||[];
-  let summary='已生成 '+data.imported+' 条转发规则。';
-  if(data.pool_exhausted)summary+=' 端口池（{{.PortStart}}–{{.PortEnd}}）已用完，部分映射未导入，可在系统配置里调大范围。';
-  if(data.imported===0)summary+=' 没有可导入的新映射（可能已全部导入，或尚未同步爱快端口）。';
-  document.getElementById('importSummary').textContent=summary;
-  let html='';
-  if(items.length){
-    html='<table class="table"><thead><tr><th>外网端口</th><th>改为监听</th><th>后端（保持不变）</th><th>备注</th></tr></thead><tbody>';
-    for(const it of items){
-      html+='<tr><td class="mono">'+escHtml(it.external_port)+'</td>'
-        +'<td class="mono">'+escHtml(it.listen_port)+'</td>'
-        +'<td class="mono">'+escHtml(it.backend_ip)+':'+escHtml(it.backend_port)+'</td>'
-        +'<td>'+escHtml(it.label||'-')+'</td></tr>';
-    }
-    html+='</tbody></table>';
-  }
-  document.getElementById('importList').innerHTML=html;
-  document.getElementById('importModal').style.display='flex';
 }
 async function toggleFwd(id){
   const res=await fetch('/api/forwards/'+id+'/toggle',{method:'POST'});

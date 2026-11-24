@@ -24,32 +24,24 @@ func newTestConfig(t *testing.T) *Config {
 func TestEnvOverrides(t *testing.T) {
 	// 注意：不能在 t.Setenv 之前调用 newTestConfig，因为 New() 会立即 applyEnv
 	t.Setenv("PG_BAN_MINUTES", "45")
-	t.Setenv("PG_BAN_MODE", "blacklist")
-	t.Setenv("PG_IKUAI_HOST", "192.168.2.1")
-	t.Setenv("PG_SNIFFER_ENABLED", "0")
 	t.Setenv("PG_SYN_FLOOD_THRESHOLD", "99")
+	t.Setenv("PG_LOGIN_FAIL_ENABLED", "0")
 
 	cfg := newTestConfig(t)
 
 	if got := cfg.BanMinutes(); got != 45 {
 		t.Errorf("PG_BAN_MINUTES: got %d, want 45", got)
 	}
-	if got := cfg.BanMode(); got != "blacklist" {
-		t.Errorf("PG_BAN_MODE: got %s, want blacklist", got)
-	}
-	if got := cfg.IKuaiBaseURL(); got != "http://192.168.2.1:80" {
-		t.Errorf("PG_IKUAI_HOST: got %s", got)
-	}
-	if got := cfg.SnifferEnabled(); got {
-		t.Error("PG_SNIFFER_ENABLED=0 应关闭抓包")
-	}
 	if got := cfg.Thresholds().SynFlood; got != 99 {
 		t.Errorf("PG_SYN_FLOOD_THRESHOLD: got %d, want 99", got)
+	}
+	if cfg.Thresholds().LoginFailEnabled {
+		t.Error("PG_LOGIN_FAIL_ENABLED=0 应关闭登录爆破检测")
 	}
 }
 
 // TestSavedConfigWinsOverEnv 验证 Web 保存的配置在容器重启后不会被
-// ipkg environment 里的默认值（如 PG_IKUAI_HOST=127.0.0.1）覆盖。
+// ipkg environment 里的默认值覆盖。
 func TestSavedConfigWinsOverEnv(t *testing.T) {
 	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -57,33 +49,26 @@ func TestSavedConfigWinsOverEnv(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	// 模拟用户在 Web 配置页保存过的值
 	first, err := New(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.Update(map[string]any{
-		"ikuai_host": "192.168.31.253", "ikuai_port": 443, "ikuai_ssl": true,
-		"ikuai_username": "zzbazinga",
-	}); err != nil {
+	if err := first.Update(map[string]any{"ban_duration_minutes": 60, "web_username": "guard"}); err != nil {
 		t.Fatal(err)
 	}
 
 	// 模拟容器重启：environment 仍带旧默认值
-	t.Setenv("PG_IKUAI_HOST", "127.0.0.1")
-	t.Setenv("PG_IKUAI_PORT", "80")
-	t.Setenv("PG_IKUAI_SSL", "false")
-	t.Setenv("PG_IKUAI_USERNAME", "admin")
+	t.Setenv("PG_BAN_MINUTES", "30")
+	t.Setenv("PG_WEB_USERNAME", "admin")
 	second, err := New(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := second.IKuaiBaseURL(); got != "https://192.168.31.253:443" {
-		t.Errorf("已保存的 host/port/ssl 应优先于环境变量，got %s", got)
+	if got := second.BanMinutes(); got != 60 {
+		t.Errorf("已保存的封禁时长应优先于环境变量，got %d", got)
 	}
-	user, _, _ := second.IKuaiCreds()
-	if user != "zzbazinga" {
-		t.Errorf("已保存的用户名应优先于环境变量，got %s", user)
+	if got := second.WebUsername(); got != "guard" {
+		t.Errorf("已保存的用户名应优先于环境变量，got %s", got)
 	}
 }
 

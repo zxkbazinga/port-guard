@@ -13,7 +13,7 @@ import (
 	"github.com/zxkbazinga/port-guard/internal/config"
 )
 
-// SyslogReceiver 接收爱快推送的 syslog，提取攻击告警与连接信息。
+// SyslogReceiver 接收 NAS / Windows / Ubuntu 转发的安全日志，提取登录失败事件。
 type SyslogReceiver struct {
 	cfg      *config.Config
 	log      *slog.Logger
@@ -29,9 +29,6 @@ func NewSyslogReceiver(cfg *config.Config, log *slog.Logger, eng *Engine) *Syslo
 }
 
 func (s *SyslogReceiver) Start() error {
-	if !s.cfg.SyslogEnabled() {
-		return nil
-	}
 	addr := &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: s.cfg.SyslogPort()}
 	conn, err := net.ListenUDP("udp4", addr)
 	if err != nil {

@@ -17,7 +17,6 @@ import (
 	"github.com/zxkbazinga/port-guard/internal/ban"
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
-	"github.com/zxkbazinga/port-guard/internal/ikuai"
 	"github.com/zxkbazinga/port-guard/internal/proxy"
 	"github.com/zxkbazinga/port-guard/internal/store"
 )
@@ -32,14 +31,9 @@ var staticFS embed.FS
 type Server struct {
 	cfg      *config.Config
 	store    *store.Store
-	client   *ikuai.Client
 	engine   *detector.Engine
-	sniffer  *detector.Sniffer
 	syslog   *detector.SyslogReceiver
-	decoy    *detector.DecoyListener
-	probe    *detector.SourceProbe
 	proxySrv *proxy.Server
-	poller   *detector.Poller
 	bans     *ban.Manager
 	log      *slog.Logger
 	sessions *sessionStore
@@ -48,18 +42,13 @@ type Server struct {
 }
 
 type Components struct {
-	Cfg     *config.Config
-	Store   *store.Store
-	Client  *ikuai.Client
-	Engine  *detector.Engine
-	Sniffer *detector.Sniffer
-	Syslog  *detector.SyslogReceiver
-	Decoy   *detector.DecoyListener
-	Probe   *detector.SourceProbe
-	Proxy   *proxy.Server
-	Poller  *detector.Poller
-	Bans    *ban.Manager
-	Log     *slog.Logger
+	Cfg    *config.Config
+	Store  *store.Store
+	Engine *detector.Engine
+	Syslog *detector.SyslogReceiver
+	Proxy  *proxy.Server
+	Bans   *ban.Manager
+	Log    *slog.Logger
 }
 
 func NewServer(c Components) (*Server, error) {
@@ -77,18 +66,11 @@ func NewServer(c Components) (*Server, error) {
 			}
 			return d.Round(time.Second).String()
 		},
-		// 返回 template.HTMLAttr：这些片段位于标签的属性位置，
-		// 用普通 string 会被 html/template 当作不安全的属性名过滤成 ZgotmplZ，
-		// 导致 checkbox / 下拉框的勾选状态无法回显。值均为硬编码常量，安全。
+		// 返回 template.HTMLAttr：位于标签属性位置的片段必须用该类型，
+		// 否则 html/template 会过滤成 ZgotmplZ。值均为硬编码常量，安全。
 		"checked": func(v bool) template.HTMLAttr {
 			if v {
 				return "checked"
-			}
-			return ""
-		},
-		"selected": func(a, b string) template.HTMLAttr {
-			if a == b {
-				return "selected"
 			}
 			return ""
 		},
@@ -98,17 +80,14 @@ func NewServer(c Components) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		cfg: c.Cfg, store: c.Store, client: c.Client, engine: c.Engine,
-		sniffer: c.Sniffer, syslog: c.Syslog, decoy: c.Decoy, probe: c.Probe, proxySrv: c.Proxy,
-		poller: c.Poller, bans: c.Bans,
-		log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
+		cfg: c.Cfg, store: c.Store, engine: c.Engine, syslog: c.Syslog, proxySrv: c.Proxy,
+		bans: c.Bans, log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
 	}
 	s.routes()
 	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
-	// 静态资源无需认证
 	static, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(static))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +108,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /config", s.withAuth(s.configSave))
 	s.mux.HandleFunc("GET /events", s.withAuth(s.eventsPage))
 	s.mux.HandleFunc("GET /bans", s.withAuth(s.bansPage))
-	s.mux.HandleFunc("GET /ports", s.withAuth(s.portsPage))
 	s.mux.HandleFunc("GET /proxy", s.withAuth(s.proxyPage))
 	// API
 	s.mux.HandleFunc("GET /api/status", s.withAuth(s.apiStatus))
@@ -137,19 +115,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/bans", s.withAuth(s.apiBans))
 	s.mux.HandleFunc("GET /api/config", s.withAuth(s.apiConfigGet))
 	s.mux.HandleFunc("POST /api/config", s.withAuth(s.apiConfigSet))
-	s.mux.HandleFunc("POST /api/config/test-ikuai", s.withAuth(s.apiConfigTestIKuai))
-	s.mux.HandleFunc("GET /api/ports", s.withAuth(s.apiPorts))
-	s.mux.HandleFunc("POST /api/ports/sync", s.withAuth(s.apiPortSync))
-	s.mux.HandleFunc("POST /api/ports", s.withAuth(s.apiPortAdd))
-	s.mux.HandleFunc("DELETE /api/ports/{id}", s.withAuth(s.apiPortDelete))
 	s.mux.HandleFunc("GET /api/forwards", s.withAuth(s.apiForwards))
 	s.mux.HandleFunc("POST /api/forwards", s.withAuth(s.apiForwardAdd))
-	s.mux.HandleFunc("POST /api/forwards/import", s.withAuth(s.apiForwardImport))
 	s.mux.HandleFunc("POST /api/forwards/{id}/toggle", s.withAuth(s.apiForwardToggle))
 	s.mux.HandleFunc("DELETE /api/forwards/{id}", s.withAuth(s.apiForwardDelete))
 	s.mux.HandleFunc("POST /api/ban", s.withAuth(s.apiBan))
 	s.mux.HandleFunc("POST /api/unban", s.withAuth(s.apiUnban))
-	s.mux.HandleFunc("POST /api/probe", s.withAuth(s.apiProbe))
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 }
 
@@ -201,56 +172,43 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
 	bans, _ := s.store.ListBans(true)
 	events, _ := s.store.ListEvents(8, 0, "")
-	ports, _ := s.store.ListPorts(true)
 	activeBans, _ := s.store.ActiveBanCount()
 	attacks, _ := s.store.EventCount("attack", time.Now().Add(-24*time.Hour).Unix())
 	s.render(w, "dashboard.html", map[string]any{
 		"Title":  "概览",
-		"Active": activeBans, "Attacks24h": attacks, "Ports": len(ports),
-		"Bans": bans, "Events": events, "Mode": s.client.Mode(),
-		"Sniffer": s.sniffer.Stats(), "Syslog": s.syslog.Stats(), "Decoy": s.decoyStats(),
-		"Probe": s.probeStats(), "Proxy": s.proxyStats(),
-		"Poller": s.poller.Stats(), "BanStats": s.bans.Stats(),
+		"Active": activeBans, "Attacks24h": attacks,
+		"Bans": bans, "Events": events,
+		"Syslog": s.syslog.Stats(), "Proxy": s.proxyStats(),
+		"BanStats": s.bans.Stats(), "Engine": s.engine.Stats(),
 		"Enabled": s.cfg.DetectionEnabled(),
 	})
 }
 
 func (s *Server) configPage(w http.ResponseWriter, _ *http.Request) {
 	s.render(w, "config.html", map[string]any{
-		"Title": "系统配置",
-		"Cfg":   s.cfg.Snapshot(true),
-		"Mode":  s.client.Mode(),
-		"Saved": false,
+		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Saved": false,
 	})
 }
 
 func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	updates := map[string]any{}
-	boolKeys := []string{"ikuai_ssl", "ignore_private_ips", "detection_enabled", "sniffer_enabled",
-		"syslog_enabled", "conn_poll_enabled", "port_refresh_enabled", "login_fail_enabled",
-		"decoy_enabled", "decoy_ban_enabled", "proxy_enabled"}
+	boolKeys := []string{"ignore_private_ips", "detection_enabled", "login_fail_enabled", "proxy_enabled"}
 	for _, k := range boolKeys {
 		updates[k] = r.FormValue(k) == "on" || r.FormValue(k) == "1"
 	}
-	intKeys := []string{"ikuai_port", "ikuai_timeout", "ban_duration_minutes", "syslog_port",
-		"conn_poll_interval", "port_refresh_interval", "window_seconds", "syn_flood_threshold",
+	intKeys := []string{"ban_duration_minutes", "syslog_port", "window_seconds", "syn_flood_threshold",
 		"port_scan_threshold", "conn_rate_threshold", "udp_flood_threshold",
 		"alert_cooldown_seconds", "event_retention_days", "web_session_hours",
 		"login_fail_threshold", "login_fail_window_seconds",
-		"decoy_threshold", "decoy_window_seconds", "decoy_ban_minutes",
 		"proxy_port_start", "proxy_port_end"}
 	for _, k := range intKeys {
 		n, _ := strconv.Atoi(r.FormValue(k))
 		updates[k] = n
 	}
-	strKeys := []string{"ikuai_host", "ikuai_username", "whitelist", "ban_mode",
-		"sniffer_iface", "conn_func_name", "web_username", "decoy_ports"}
+	strKeys := []string{"whitelist", "web_username"}
 	for _, k := range strKeys {
 		updates[k] = strings.TrimSpace(r.FormValue(k))
-	}
-	if pw := r.FormValue("ikuai_password"); pw != "" {
-		updates["ikuai_password"] = pw
 	}
 	if pw := r.FormValue("web_password"); pw != "" {
 		hash, err := HashPassword(pw)
@@ -261,15 +219,10 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	if err := s.cfg.Update(updates); err != nil {
 		s.log.Error("保存配置失败", "err", err)
 	}
-	// 配置变更后重置引擎状态与 API 探测，并立即按新配置重登、同步端口映射
 	s.engine.Reset()
-	s.client.ResetProbe()
-	s.client.ResetSession()
-	s.reloadDecoy()
 	s.reloadProxy()
-	go s.poller.RefreshPorts()
 	s.render(w, "config.html", map[string]any{
-		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Mode": s.client.Mode(), "Saved": true,
+		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Saved": true,
 	})
 }
 
@@ -284,11 +237,6 @@ func (s *Server) bansPage(w http.ResponseWriter, _ *http.Request) {
 	s.render(w, "bans.html", map[string]any{"Title": "封禁管理", "Bans": bans})
 }
 
-func (s *Server) portsPage(w http.ResponseWriter, _ *http.Request) {
-	ports, _ := s.store.ListPorts(false)
-	s.render(w, "ports.html", map[string]any{"Title": "端口管理", "Ports": ports})
-}
-
 func (s *Server) proxyPage(w http.ResponseWriter, _ *http.Request) {
 	forwards, _ := s.store.ListForwards(false)
 	portStart, portEnd := s.cfg.ProxyPortRange()
@@ -299,13 +247,6 @@ func (s *Server) proxyPage(w http.ResponseWriter, _ *http.Request) {
 }
 
 // ------------------------------------------------------------------- API --
-
-func (s *Server) decoyStats() map[string]any {
-	if s.decoy == nil {
-		return map[string]any{"running": false, "ports": 0, "hits": 0}
-	}
-	return s.decoy.Stats()
-}
 
 func (s *Server) proxyStats() map[string]any {
 	if s.proxySrv == nil {
@@ -321,19 +262,6 @@ func (s *Server) reloadProxy() {
 	}
 }
 
-func (s *Server) probeStats() map[string]any {
-	if s.probe == nil {
-		return map[string]any{"running": false, "port": 0, "hits": 0, "records": []any{}}
-	}
-	return s.probe.Stats()
-}
-
-func (s *Server) reloadDecoy() {
-	if s.decoy != nil {
-		_ = s.decoy.Reload()
-	}
-}
-
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
@@ -343,13 +271,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 	activeBans, _ := s.store.ActiveBanCount()
 	attacks, _ := s.store.EventCount("attack", time.Now().Add(-24*time.Hour).Unix())
-	ports, _ := s.store.ListPorts(true)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled": s.cfg.DetectionEnabled(), "ban_mode": s.client.Mode(),
-		"active_bans": activeBans, "attacks_24h": attacks, "monitored_ports": len(ports),
-		"sniffer": s.sniffer.Stats(), "syslog": s.syslog.Stats(), "probe": s.probeStats(),
-		"decoy": s.decoyStats(), "proxy": s.proxyStats(),
-		"poller": s.poller.Stats(), "engine": s.engine.Stats(), "ban": s.bans.Stats(),
+		"enabled":     s.cfg.DetectionEnabled(),
+		"active_bans": activeBans, "attacks_24h": attacks,
+		"syslog": s.syslog.Stats(), "proxy": s.proxyStats(),
+		"engine": s.engine.Stats(), "ban": s.bans.Stats(),
 	})
 }
 
@@ -394,17 +320,11 @@ func (s *Server) apiConfigSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.engine.Reset()
-	s.client.ResetProbe()
-	s.client.ResetSession()
-	s.reloadDecoy()
 	s.reloadProxy()
-	go s.poller.RefreshPorts()
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // normalizeConfigPayload 把 API 里的明文 web_password 转成哈希字段。
-// 模块级保存和原来的全量保存共用 /api/config，密码字段不能原样入库。
-// 留空表示不修改密码，此时不写入任何密码字段。
 func normalizeConfigPayload(payload map[string]any) error {
 	raw, ok := payload["web_password"]
 	delete(payload, "web_password")
@@ -421,121 +341,6 @@ func normalizeConfigPayload(payload map[string]any) error {
 	}
 	payload["web_password_hash"] = hash
 	return nil
-}
-
-// apiConfigTestIKuai 使用请求中填写的参数测试爱快连接，不保存配置。
-// 密码字段留空时沿用当前已保存的密码（页面不回显密码）。
-func (s *Server) apiConfigTestIKuai(w http.ResponseWriter, r *http.Request) {
-	var p struct {
-		Host     string `json:"ikuai_host"`
-		Port     int    `json:"ikuai_port"`
-		SSL      bool   `json:"ikuai_ssl"`
-		Username string `json:"ikuai_username"`
-		Password string `json:"ikuai_password"`
-		Timeout  int    `json:"ikuai_timeout"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, 400, map[string]any{"error": "请求格式错误: " + err.Error()})
-		return
-	}
-	savedUser, savedPass, _ := s.cfg.IKuaiCreds()
-	if strings.TrimSpace(p.Username) == "" {
-		p.Username = savedUser
-	}
-	if p.Password == "" {
-		p.Password = savedPass
-	}
-	result := ikuai.TestConnection(ikuai.TestParams{
-		Host: strings.TrimSpace(p.Host), Port: p.Port, SSL: p.SSL,
-		Username: strings.TrimSpace(p.Username), Password: p.Password, Timeout: p.Timeout,
-	}, s.log)
-	// 测试成功即把这套参数落库并立即同步端口映射，避免"测试能连、实际没配置"。
-	// 密码为空表示沿用已保存的密码，不覆盖。
-	if result.OK {
-		updates := map[string]any{
-			"ikuai_host": strings.TrimSpace(p.Host), "ikuai_port": p.Port,
-			"ikuai_ssl": p.SSL, "ikuai_username": strings.TrimSpace(p.Username),
-			"ikuai_timeout": p.Timeout,
-		}
-		if p.Password != "" {
-			updates["ikuai_password"] = p.Password
-		}
-		if err := s.cfg.Update(updates); err != nil {
-			s.log.Error("测试连接成功后保存配置失败", "err", err)
-		} else {
-			s.client.ResetSession()
-			s.client.ResetProbe()
-			if n, err := s.poller.RefreshPorts(); err == nil {
-				result.SyncedPorts = n
-			}
-			result.Saved = true
-		}
-	}
-	writeJSON(w, 200, result)
-}
-
-func (s *Server) apiPorts(w http.ResponseWriter, _ *http.Request) {
-	ports, err := s.store.ListPorts(false)
-	if err != nil {
-		writeJSON(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, ports)
-}
-
-// apiPortSync 手动触发一次爱快端口映射同步，返回同步到的条数。
-func (s *Server) apiPortSync(w http.ResponseWriter, _ *http.Request) {
-	s.client.ResetSession()
-	n, err := s.poller.RefreshPorts()
-	if err != nil {
-		writeJSON(w, 500, map[string]any{"error": "同步失败: " + err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "synced": n})
-}
-
-func (s *Server) apiPortAdd(w http.ResponseWriter, r *http.Request) {
-	var p struct {
-		ExternalPort int    `json:"external_port"`
-		InternalPort int    `json:"internal_port"`
-		InternalIP   string `json:"internal_ip"`
-		Protocol     string `json:"protocol"`
-		Label        string `json:"label"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, 400, map[string]any{"error": err.Error()})
-		return
-	}
-	if p.ExternalPort < 1 || p.ExternalPort > 65535 {
-		writeJSON(w, 400, map[string]any{"error": "外部端口无效"})
-		return
-	}
-	if p.InternalPort == 0 {
-		p.InternalPort = p.ExternalPort
-	}
-	if p.Protocol == "" {
-		p.Protocol = "tcp"
-	}
-	err := s.store.UpsertPort(store.Port{
-		ExternalPort: p.ExternalPort, InternalPort: p.InternalPort, InternalIP: p.InternalIP,
-		Protocol: p.Protocol, Label: p.Label, Enabled: true, Source: "manual",
-	})
-	if err != nil {
-		writeJSON(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	s.portSync()
-	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
-func (s *Server) apiPortDelete(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := s.store.DeletePort(id); err != nil {
-		writeJSON(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	s.portSync()
-	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // ---------------------------------------------------------- forwards API --
@@ -611,96 +416,7 @@ func (s *Server) apiForwardDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-// forwardImportItem 是一条由爱快映射生成的转发规则及对应的改映射提示。
-type forwardImportItem struct {
-	ListenPort   int    `json:"listen_port"`   // 分配给代理的监听端口（来自端口池）
-	BackendIP    string `json:"backend_ip"`    // 原映射的内网 IP
-	BackendPort  int    `json:"backend_port"`  // 原映射的内网端口
-	ExternalPort int    `json:"external_port"` // 爱快上的外网端口
-	Protocol     string `json:"protocol"`
-	Label        string `json:"label"`
-}
-
-// apiForwardImport 从已同步的爱快端口映射一键生成转发规则。
-// 后端地址/端口/协议/备注直接复用映射数据；监听端口从预映射的端口池自动分配，
-// 因为 bridge 网络下容器只能监听 compose 已暴露的端口。
-// 只生成规则，不修改爱快映射——改映射有断网风险，需用户在爱快侧手动完成。
-func (s *Server) apiForwardImport(w http.ResponseWriter, _ *http.Request) {
-	ports, err := s.store.ListPorts(false)
-	if err != nil {
-		writeJSON(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	existing, _ := s.store.ListForwards(false)
-
-	// 已占用的后端（backendIP:port）不重复导入；已占用的监听端口不再分配。
-	seenBackend := make(map[string]bool, len(existing))
-	usedListen := make(map[int]bool, len(existing))
-	for _, f := range existing {
-		seenBackend[fmt.Sprintf("%s:%d/%s", f.BackendIP, f.BackendPort, f.Protocol)] = true
-		usedListen[f.ListenPort] = true
-	}
-
-	portStart, portEnd := s.cfg.ProxyPortRange()
-	nextPort := portStart
-	items := make([]forwardImportItem, 0)
-	poolExhausted := false
-	for _, p := range ports {
-		if p.Source != "ikuai" || !p.Enabled || p.InternalIP == "" || net.ParseIP(p.InternalIP) == nil {
-			continue
-		}
-		if p.InternalPort < 1 || p.InternalPort > 65535 {
-			continue
-		}
-		proto := p.Protocol
-		if proto != "tcp" && proto != "udp" {
-			proto = "tcp"
-		}
-		key := fmt.Sprintf("%s:%d/%s", p.InternalIP, p.InternalPort, proto)
-		if seenBackend[key] {
-			continue
-		}
-		// 从端口池取下一个空闲端口。
-		listen := 0
-		for nextPort <= portEnd {
-			candidate := nextPort
-			nextPort++
-			if !usedListen[candidate] {
-				listen = candidate
-				break
-			}
-		}
-		if listen == 0 {
-			poolExhausted = true
-			break
-		}
-		if err := s.store.UpsertForward(store.Forward{
-			ListenPort: listen, BackendIP: p.InternalIP, BackendPort: p.InternalPort,
-			Protocol: proto, Label: p.Label, Enabled: true,
-		}); err != nil {
-			continue
-		}
-		usedListen[listen] = true
-		seenBackend[key] = true
-		items = append(items, forwardImportItem{
-			ListenPort: listen, BackendIP: p.InternalIP, BackendPort: p.InternalPort,
-			ExternalPort: p.ExternalPort, Protocol: proto, Label: p.Label,
-		})
-	}
-	s.reloadProxy()
-	writeJSON(w, 200, map[string]any{
-		"ok": true, "imported": len(items), "items": items, "pool_exhausted": poolExhausted,
-	})
-}
-
-func (s *Server) portSync() {
-	ports, _ := s.store.ListPorts(true)
-	values := make([]int, 0, len(ports)*2)
-	for _, p := range ports {
-		values = append(values, p.ExternalPort, p.InternalPort)
-	}
-	s.engine.SetPorts(values)
-}
+// -------------------------------------------------------------- bans API --
 
 func (s *Server) apiBan(w http.ResponseWriter, r *http.Request) {
 	var p struct {
@@ -723,6 +439,9 @@ func (s *Server) apiBan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
+	if s.proxySrv != nil {
+		s.proxySrv.Block(p.IP, p.Minutes)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -742,23 +461,6 @@ func (s *Server) apiUnban(w http.ResponseWriter, r *http.Request) {
 		s.proxySrv.Unblock(p.IP)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
-func (s *Server) apiProbe(w http.ResponseWriter, _ *http.Request) {
-	s.client.ResetProbe()
-	// 触发一次探测：用空封禁（none 模式除外）
-	mode := s.cfg.BanMode()
-	if mode == "none" {
-		writeJSON(w, 200, map[string]any{"mode": "none"})
-		return
-	}
-	_, err := s.client.Ban("203.0.113.254", 1, "port-guard probe")
-	if err != nil {
-		writeJSON(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	_ = s.client.Unban("203.0.113.254", "")
-	writeJSON(w, 200, map[string]any{"mode": s.client.Mode()})
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

@@ -11,27 +11,12 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
-
-	"github.com/zxkbazinga/port-guard/internal/textutil"
 )
 
 // Store 线程安全的数据库封装。
 type Store struct {
 	db *sql.DB
 	mu sync.RWMutex
-}
-
-// Port 是一条端口映射记录（来自爱快 API 或手工添加）。
-type Port struct {
-	ID           int64  `json:"id"`
-	ExternalPort int    `json:"external_port"`
-	InternalPort int    `json:"internal_port"`
-	InternalIP   string `json:"internal_ip"`
-	Protocol     string `json:"protocol"`
-	Label        string `json:"label"`
-	Enabled      bool   `json:"enabled"`
-	Source       string `json:"source"`
-	UpdatedAt    int64  `json:"updated_at"`
 }
 
 // Forward 是一条 TCP 转发规则（代理模式）：监听本机端口，转发到内网后端。
@@ -76,18 +61,6 @@ const schema = `
 CREATE TABLE IF NOT EXISTS config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS ports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_port INTEGER NOT NULL,
-    internal_port INTEGER NOT NULL,
-    internal_ip TEXT DEFAULT '',
-    protocol TEXT DEFAULT 'tcp',
-    label TEXT DEFAULT '',
-    enabled INTEGER DEFAULT 1,
-    source TEXT DEFAULT 'manual',
-    updated_at INTEGER DEFAULT 0,
-    UNIQUE(external_port, protocol)
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,78 +182,6 @@ func (s *Store) SetConfigs(values map[string]any) error {
 		}
 	}
 	return tx.Commit()
-}
-
-// ----------------------------------------------------------------- ports --
-
-func (s *Store) ListPorts(enabledOnly bool) ([]Port, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	query := "SELECT id, external_port, internal_port, internal_ip, protocol, label, enabled, source, updated_at FROM ports"
-	if enabledOnly {
-		query += " WHERE enabled = 1"
-	}
-	query += " ORDER BY external_port, protocol"
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Port
-	for rows.Next() {
-		var p Port
-		var enabled int
-		if err := rows.Scan(&p.ID, &p.ExternalPort, &p.InternalPort, &p.InternalIP, &p.Protocol,
-			&p.Label, &enabled, &p.Source, &p.UpdatedAt); err != nil {
-			return nil, err
-		}
-		p.Enabled = enabled == 1
-		// 兼容旧数据：此前同步进来的备注可能是爱快的 URL 转义原文，展示前还原。
-		if p.Source == "ikuai" {
-			p.Label = textutil.DecodeURLEscaped(p.Label)
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) UpsertPort(p Port) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	enabled := 0
-	if p.Enabled {
-		enabled = 1
-	}
-	_, err := s.db.Exec(`
-INSERT INTO ports(external_port, internal_port, internal_ip, protocol, label, enabled, source, updated_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(external_port, protocol) DO UPDATE SET
-    internal_port = excluded.internal_port,
-    internal_ip = excluded.internal_ip,
-    label = excluded.label,
-    enabled = excluded.enabled,
-    source = excluded.source,
-    updated_at = excluded.updated_at`,
-		p.ExternalPort, p.InternalPort, p.InternalIP, p.Protocol, p.Label, enabled, p.Source, time.Now().Unix())
-	return err
-}
-
-func (s *Store) DeletePort(id int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.db.Exec("DELETE FROM ports WHERE id = ?", id)
-	return err
-}
-
-func (s *Store) ClearPorts(source string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if source == "" {
-		_, err := s.db.Exec("DELETE FROM ports")
-		return err
-	}
-	_, err := s.db.Exec("DELETE FROM ports WHERE source = ?", source)
-	return err
 }
 
 // ---------------------------------------------------------------- events --

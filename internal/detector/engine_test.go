@@ -24,8 +24,6 @@ func testConfig(t *testing.T) *config.Config {
 		t.Fatal(err)
 	}
 	_ = cfg.Update(map[string]any{
-		"sniffer_enabled": false, "syslog_enabled": false,
-		"conn_poll_enabled": false, "port_refresh_enabled": false,
 		"window_seconds": 60, "syn_flood_threshold": 5,
 		"port_scan_threshold": 4, "conn_rate_threshold": 10,
 		"udp_flood_threshold": 10, "alert_cooldown_seconds": 300,
@@ -38,7 +36,6 @@ func testEngine(t *testing.T, alerts *[]Alert) (*Engine, *config.Config) {
 	cfg := testConfig(t)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	eng := New(cfg, log, func(a Alert) { *alerts = append(*alerts, a) })
-	eng.SetPorts([]int{22, 80, 443, 8080, 3306})
 	return eng, cfg
 }
 
@@ -75,39 +72,6 @@ func TestPortScan(t *testing.T) {
 	}
 }
 
-func TestDecoyHitAlertOnlyByDefault(t *testing.T) {
-	var alerts []Alert
-	eng, cfg := testEngine(t, &alerts)
-	_ = cfg.Update(map[string]any{"decoy_enabled": true})
-	now := time.Now()
-	eng.Feed(Observation{Kind: KindDecoy, IP: "8.8.4.4", Port: 22200, TS: now})
-	if len(alerts) != 0 {
-		t.Fatalf("只命中 1 个诱饵端口不应动作，实际 %d 条", len(alerts))
-	}
-	eng.Feed(Observation{Kind: KindDecoy, IP: "8.8.4.4", Port: 22201, TS: now.Add(time.Second)})
-	if len(alerts) != 1 {
-		t.Fatalf("命中 2 个不同诱饵端口应产生 1 条告警，实际 %d 条", len(alerts))
-	}
-	if alerts[0].Rule != "decoy_hit" || !alerts[0].NoBan {
-		t.Fatalf("默认应只告警不封禁，实际 rule=%s noBan=%v", alerts[0].Rule, alerts[0].NoBan)
-	}
-}
-
-func TestDecoyHitCanBan(t *testing.T) {
-	var alerts []Alert
-	eng, cfg := testEngine(t, &alerts)
-	_ = cfg.Update(map[string]any{"decoy_enabled": true, "decoy_ban_enabled": true})
-	now := time.Now()
-	eng.Feed(Observation{Kind: KindDecoy, IP: "8.8.4.5", Port: 22200, TS: now})
-	eng.Feed(Observation{Kind: KindDecoy, IP: "8.8.4.5", Port: 22202, TS: now.Add(time.Second)})
-	if len(alerts) != 1 {
-		t.Fatalf("期望 1 条告警，实际 %d 条", len(alerts))
-	}
-	if alerts[0].NoBan || alerts[0].Minutes != 1 {
-		t.Fatalf("开启封禁后应 noBan=false 且时长 1 分钟，实际 %+v", alerts[0])
-	}
-}
-
 func TestPrivateIPIgnored(t *testing.T) {
 	var alerts []Alert
 	eng, _ := testEngine(t, &alerts)
@@ -131,18 +95,6 @@ func TestWhitelistIPIgnored(t *testing.T) {
 	}
 	if len(alerts) != 0 {
 		t.Fatalf("白名单 IP 不应触发封禁，实际 %d 条", len(alerts))
-	}
-}
-
-func TestUnmonitoredPortIgnored(t *testing.T) {
-	var alerts []Alert
-	eng, _ := testEngine(t, &alerts)
-	now := time.Now()
-	for i := 0; i < 20; i++ {
-		eng.Feed(Observation{Kind: KindSYN, IP: "9.9.9.9", Port: 9999, TS: now})
-	}
-	if len(alerts) != 0 {
-		t.Fatalf("非映射端口不应触发封禁，实际 %d 条", len(alerts))
 	}
 }
 

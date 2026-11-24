@@ -8,24 +8,17 @@
 <div class="cards">
   <div class="card"><div class="label">24 小时攻击告警</div><div class="value">{{.Attacks24h}}</div><div class="foot">次自动封禁</div></div>
   <div class="card"><div class="label">当前生效封禁</div><div class="value">{{.Active}}</div><div class="foot">个 IP 被阻断</div></div>
-  <div class="card"><div class="label">监控端口</div><div class="value">{{.Ports}}</div><div class="foot">来自爱快映射 / 手工添加</div></div>
-  <div class="card"><div class="label">封禁方式</div><div class="value small">{{.Mode}}</div><div class="foot">默认封禁 30 分钟（可配置）</div></div>
+  <div class="card"><div class="label">代理转发连接</div><div class="value">{{.Proxy.total}}</div><div class="foot">累计 · 拦截 {{.Proxy.blocked}}</div></div>
+  <div class="card"><div class="label">代理规则</div><div class="value">{{len .Proxy.ports}}</div><div class="foot">条监听中</div></div>
 </div>
 
 <div class="grid-2">
   <section class="panel">
     <h2>检测引擎状态</h2>
     <table class="kv">
-      <tr><td>抓包检测 (AF_PACKET)</td><td>{{if .Sniffer.running}}<span class="dot green"></span> 运行中 · 已处理 {{.Sniffer.packets}} 包{{else}}<span class="dot gray"></span> 未启用 / 不可用{{end}}</td></tr>
-      <tr><td>Syslog 接收</td><td>{{if .Syslog.running}}<span class="dot green"></span> 监听中 · 已收 {{.Syslog.messages}} 条{{else}}<span class="dot gray"></span> 未启用{{end}}</td></tr>
-      <tr><td>诱饵端口</td><td>{{if .Decoy.running}}<span class="dot green"></span> 监听 {{.Decoy.ports}} 个 · 命中 {{.Decoy.hits}} 次{{else}}<span class="dot gray"></span> 未启用 / 未配置端口{{end}}</td></tr>
+      <tr><td>Syslog 接收（登录爆破）</td><td>{{if .Syslog.running}}<span class="dot green"></span> 监听中 · 已收 {{.Syslog.messages}} 条{{else}}<span class="dot gray"></span> 未启用{{end}}</td></tr>
       <tr><td>转发代理</td><td>{{if .Proxy.running}}<span class="dot green"></span> 运行中 · {{len .Proxy.ports}} 条规则 · 活动 {{.Proxy.active}} · 拦截 {{.Proxy.blocked}}{{else}}<span class="dot gray"></span> 未启用{{end}}</td></tr>
-      <tr><td>爱快 API 轮询</td><td>{{if .Poller.running}}<span class="dot green"></span> 运行中{{else}}<span class="dot gray"></span> 未启用{{end}} · 连接 {{.Poller.conns_polled}} 条</td></tr>
-      <tr><td>端口映射同步</td><td>已同步 {{.Poller.ports_refreshed}} 次</td></tr>
-      {{with .Poller.conn_diag}}
-      {{if .LastError}}<tr><td>连接表诊断</td><td class="diag-error">未取到连接 · {{.LastError}}</td></tr>
-      {{else if .Variant}}<tr><td>连接表接口</td><td class="diag-ok">{{.Variant}} · 样本 {{.Sample}}</td></tr>{{end}}
-      {{end}}
+      <tr><td>跟踪中的 IP</td><td>{{.Engine.tracked_ips}}</td></tr>
     </table>
   </section>
   <section class="panel">
@@ -43,25 +36,6 @@
     {{else}}<p class="empty">暂无事件，一切正常。</p>{{end}}
   </section>
 </div>
-
-<section class="panel">
-  <div class="section-head">
-    <h2>源 IP 验证</h2>
-    <span class="badge {{if .Probe.running}}green{{else}}gray{{end}}">{{if .Probe.running}}监听 :{{.Probe.port}}{{else}}未启动{{end}}</span>
-  </div>
-  <p class="desc">在爱快把一条不用的 WAN 端口映射到本应用 IP 的 <strong>{{.Probe.port}}</strong> 端口，然后用<strong>手机 4G（关 WiFi）</strong>浏览器访问 <code>http://你的公网IP:映射端口</code>。下面会显示 port-guard 实际看到的来源 IP。</p>
-  {{if .Probe.records}}
-  <table class="table">
-    <thead><tr><th>时间</th><th>来源 IP</th><th>来源端口</th></tr></thead>
-    <tbody>
-    {{range .Probe.records}}
-      <tr><td class="nowrap">{{.Time}}</td><td class="mono">{{.IP}}</td><td class="mono">{{.Port}}</td></tr>
-    {{end}}
-    </tbody>
-  </table>
-  {{else}}<p class="empty">暂无探测记录 · 已收到 {{.Probe.hits}} 次连接</p>{{end}}
-  <p class="desc">显示公网 IP = 爱快保留源地址，代理方案可行；显示 192.168.x.x = 源地址被改写，代理拿不到真实客户端。</p>
-</section>
 
 <section class="panel">
   <h2>当前封禁</h2>

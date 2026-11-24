@@ -6,71 +6,17 @@
 
 <section class="panel">
   <div class="section-head">
-    <h2>爱快路由器连接</h2>
-    <div class="section-actions">
-      <span class="save-feedback" hidden></span>
-      <button type="button" class="primary small section-save" data-label="爱快路由器连接">保存</button>
-    </div>
-  </div>
-  <p class="desc">用于拉取端口映射、连接表，以及下发/解除封禁。建议在爱快中创建专门的管理账号。</p>
-  <div class="form-grid">
-    <label>管理地址<input name="ikuai_host" value="{{.Cfg.ikuai_host}}" placeholder="192.168.1.1"></label>
-    <label>端口<input type="number" name="ikuai_port" value="{{.Cfg.ikuai_port}}"></label>
-    <label>用户名<input name="ikuai_username" value="{{.Cfg.ikuai_username}}"></label>
-    <label>密码<input type="password" name="ikuai_password" placeholder="留空表示不修改"></label>
-    <label class="check"><input type="checkbox" name="ikuai_ssl" {{checked .Cfg.ikuai_ssl}}> 使用 HTTPS</label>
-    <label>超时（秒）<input type="number" name="ikuai_timeout" value="{{.Cfg.ikuai_timeout}}"></label>
-  </div>
-  <div class="test-row">
-    <button type="button" class="btn" id="ikuai-test-btn">测试连接</button>
-    <span class="hint">测试成功会自动保存上方参数并同步端口映射；密码留空则使用已保存的密码</span>
-  </div>
-  <div id="ikuai-test-result" class="alert" hidden></div>
-</section>
-
-<section class="panel">
-  <div class="section-head">
     <h2>封禁策略</h2>
     <div class="section-actions">
       <span class="save-feedback" hidden></span>
       <button type="button" class="primary small section-save" data-label="封禁策略">保存</button>
     </div>
   </div>
+  <p class="desc">封禁在本应用的代理层即时生效：命中规则的连接会被当场断开，来自被封 IP 的新连接直接拒绝。不依赖爱快封禁 API。</p>
   <div class="form-grid">
     <label>封禁时长（分钟）<input type="number" name="ban_duration_minutes" value="{{.Cfg.ban_duration_minutes}}" min="1"></label>
-    <label>封禁方式
-      <select name="ban_mode">
-        <option value="auto" {{selected .Cfg.ban_mode "auto"}}>自动探测（推荐）</option>
-        <option value="blacklist" {{selected .Cfg.ban_mode "blacklist"}}>安全防护黑名单</option>
-        <option value="acl" {{selected .Cfg.ban_mode "acl"}}>ACL 禁止规则</option>
-        <option value="none" {{selected .Cfg.ban_mode "none"}}>只告警不封禁</option>
-      </select>
-    </label>
     <label class="full">白名单（CIDR，逗号分隔，不封禁）<input name="whitelist" value="{{.Cfg.whitelist}}"></label>
     <label class="check"><input type="checkbox" name="ignore_private_ips" {{checked .Cfg.ignore_private_ips}}> 忽略私网地址（防止误封内网）</label>
-  </div>
-  <p class="hint">当前检测到的封禁方式：<strong>{{.Mode}}</strong>。如果探测失败，可手动指定封禁方式后保存。</p>
-</section>
-
-<section class="panel">
-  <div class="section-head">
-    <h2>检测源</h2>
-    <div class="section-actions">
-      <span class="save-feedback" hidden></span>
-      <button type="button" class="primary small section-save" data-label="检测源">保存</button>
-    </div>
-  </div>
-  <div class="form-grid">
-    <label class="check"><input type="checkbox" name="detection_enabled" {{checked .Cfg.detection_enabled}}> 启用攻击检测</label>
-    <label class="check"><input type="checkbox" name="sniffer_enabled" {{checked .Cfg.sniffer_enabled}}> 抓包检测（需 host 网络）</label>
-    <label>抓包网卡<input name="sniffer_iface" value="{{.Cfg.sniffer_iface}}" placeholder="any"></label>
-    <label class="check"><input type="checkbox" name="syslog_enabled" {{checked .Cfg.syslog_enabled}}> 接收爱快 Syslog</label>
-    <label>Syslog 端口<input type="number" name="syslog_port" value="{{.Cfg.syslog_port}}"></label>
-    <label class="check"><input type="checkbox" name="conn_poll_enabled" {{checked .Cfg.conn_poll_enabled}}> 轮询爱快连接表</label>
-    <label>连接表接口 func_name<input name="conn_func_name" value="{{.Cfg.conn_func_name}}"></label>
-    <label>轮询间隔（秒）<input type="number" name="conn_poll_interval" value="{{.Cfg.conn_poll_interval}}"></label>
-    <label class="check"><input type="checkbox" name="port_refresh_enabled" {{checked .Cfg.port_refresh_enabled}}> 自动同步端口映射</label>
-    <label>同步间隔（秒）<input type="number" name="port_refresh_interval" value="{{.Cfg.port_refresh_interval}}"></label>
   </div>
 </section>
 
@@ -82,30 +28,12 @@
       <button type="button" class="primary small section-save" data-label="登录爆破防护">保存</button>
     </div>
   </div>
-  <p class="desc">接收群晖 / Windows / Ubuntu 转发的登录失败日志，同一 IP 在窗口内失败达到阈值即封禁。需在各服务器配置将安全日志发送到本机的 Syslog 端口。</p>
+  <p class="desc">接收群晖 / Windows / Ubuntu 转发的登录失败日志（UDP Syslog），同一 IP 在窗口内失败达到阈值即封禁。需在各服务器配置把安全日志发到本应用的 Syslog 端口。</p>
   <div class="form-grid">
     <label class="check"><input type="checkbox" name="login_fail_enabled" {{checked .Cfg.login_fail_enabled}}> 启用登录爆破检测</label>
+    <label>Syslog 端口（UDP）<input type="number" name="syslog_port" value="{{.Cfg.syslog_port}}"></label>
     <label>失败次数阈值<input type="number" name="login_fail_threshold" value="{{.Cfg.login_fail_threshold}}" min="1"></label>
     <label>统计窗口（秒）<input type="number" name="login_fail_window_seconds" value="{{.Cfg.login_fail_window_seconds}}" min="30"></label>
-  </div>
-</section>
-
-<section class="panel">
-  <div class="section-head">
-    <h2>诱饵端口</h2>
-    <div class="section-actions">
-      <span class="save-feedback" hidden></span>
-      <button type="button" class="primary small section-save" data-label="诱饵端口">保存</button>
-    </div>
-  </div>
-  <p class="desc">ipkg 桥接网络只暴露 <strong>22200–22203</strong> 四个容器端口。请在爱快「端口映射」里把不用的 WAN 端口 DNAT 到本应用的 <strong>同网段 IP:22200–22203</strong>（例如 WAN 3389 → 容器 IP:22200）。任何连上来的公网 IP 都是扫描行为；窗口内命中不同诱饵端口达到阈值才动作，私网与白名单 IP 自动跳过。不依赖爱快连接表 API 或日志。</p>
-  <div class="form-grid">
-    <label class="check"><input type="checkbox" name="decoy_enabled" {{checked .Cfg.decoy_enabled}}> 启用诱饵端口监听</label>
-    <label class="full">诱饵端口（逗号分隔，ipkg 请用 22200–22203）<input name="decoy_ports" value="{{.Cfg.decoy_ports}}" placeholder="22200,22201,22202,22203"></label>
-    <label>命中几个不同端口才动作<input type="number" name="decoy_threshold" value="{{.Cfg.decoy_threshold}}" min="1"></label>
-    <label>统计窗口（秒）<input type="number" name="decoy_window_seconds" value="{{.Cfg.decoy_window_seconds}}" min="10"></label>
-    <label class="check"><input type="checkbox" name="decoy_ban_enabled" {{checked .Cfg.decoy_ban_enabled}}> 命中后封禁（不勾则仅记录告警）</label>
-    <label>封禁时长（分钟）<input type="number" name="decoy_ban_minutes" value="{{.Cfg.decoy_ban_minutes}}" min="1"></label>
   </div>
 </section>
 
@@ -117,13 +45,13 @@
       <button type="button" class="primary small section-save" data-label="转发代理">保存</button>
     </div>
   </div>
-  <p class="desc">串联模式：爱快把外网端口映射到本应用 IP 的监听端口，由代理转发到内网服务。启用后请在「转发代理」菜单添加规则或从爱快映射导入。所有连接都过检测引擎，命中规则当场断开，不依赖爱快封禁 API。<strong>警告：</strong>启用后转发端口需要容器已映射（ipkg 默认映射 22300–22349），且 port-guard 故障时这些服务会中断。</p>
+  <p class="desc">串联模式：爱快把外网端口映射到本应用 IP 的监听端口，由代理转发到内网服务。启用后请在「转发代理」菜单手工添加规则。所有连接都过检测引擎，命中当场断开，封禁不依赖任何外部 API。<strong>警告：</strong>启用后转发端口需要容器已映射（ipkg 默认映射 22300–22349），且本应用故障时这些服务会中断。</p>
   <div class="form-grid">
     <label class="check"><input type="checkbox" name="proxy_enabled" {{checked .Cfg.proxy_enabled}}> 启用转发代理（默认关闭）</label>
     <label>端口池起始<input type="number" name="proxy_port_start" value="{{.Cfg.proxy_port_start}}" min="22300" max="22349"></label>
     <label>端口池结束<input type="number" name="proxy_port_end" value="{{.Cfg.proxy_port_end}}" min="22300" max="22349"></label>
   </div>
-  <p class="hint">端口池是「从爱快映射导入」时给新规则分配监听端口的范围，须在容器已映射的 22300–22349 之内。改这里只影响新导入的规则，不影响已建的转发规则；每次导入从起始端口往后找空闲端口。</p>
+  <p class="hint">端口池是添加转发规则时建议使用的监听端口范围，须在容器已映射的 22300–22349 之内。改这里不影响已建规则。</p>
 </section>
 
 <section class="panel">
@@ -134,15 +62,15 @@
       <button type="button" class="primary small section-save" data-label="检测阈值">保存</button>
     </div>
   </div>
-  <p class="desc">统计窗口内超过阈值即判定为攻击并自动封禁。数值越大越保守。</p>
   <div class="form-grid">
-    <label>统计窗口（秒）<input type="number" name="window_seconds" value="{{.Cfg.window_seconds}}"></label>
-    <label>SYN Flood 阈值<input type="number" name="syn_flood_threshold" value="{{.Cfg.syn_flood_threshold}}"></label>
-    <label>端口扫描阈值（不同端口数）<input type="number" name="port_scan_threshold" value="{{.Cfg.port_scan_threshold}}"></label>
-    <label>连接频率阈值<input type="number" name="conn_rate_threshold" value="{{.Cfg.conn_rate_threshold}}"></label>
-    <label>UDP Flood 阈值<input type="number" name="udp_flood_threshold" value="{{.Cfg.udp_flood_threshold}}"></label>
-    <label>同一 IP 告警冷却（秒）<input type="number" name="alert_cooldown_seconds" value="{{.Cfg.alert_cooldown_seconds}}"></label>
-    <label>日志保留天数（默认 3 天，自动清理）<input type="number" name="event_retention_days" value="{{.Cfg.event_retention_days}}" min="1"></label>
+    <label class="check"><input type="checkbox" name="detection_enabled" {{checked .Cfg.detection_enabled}}> 启用攻击检测</label>
+    <label>统计窗口（秒）<input type="number" name="window_seconds" value="{{.Cfg.window_seconds}}" min="10"></label>
+    <label>连接频率阈值<input type="number" name="conn_rate_threshold" value="{{.Cfg.conn_rate_threshold}}" min="1"></label>
+    <label>端口扫描阈值<input type="number" name="port_scan_threshold" value="{{.Cfg.port_scan_threshold}}" min="1"></label>
+    <label>SYN Flood 阈值<input type="number" name="syn_flood_threshold" value="{{.Cfg.syn_flood_threshold}}" min="1"></label>
+    <label>UDP Flood 阈值<input type="number" name="udp_flood_threshold" value="{{.Cfg.udp_flood_threshold}}" min="1"></label>
+    <label>告警冷却（秒）<input type="number" name="alert_cooldown_seconds" value="{{.Cfg.alert_cooldown_seconds}}" min="10"></label>
+    <label>日志保留（天）<input type="number" name="event_retention_days" value="{{.Cfg.event_retention_days}}" min="1"></label>
   </div>
 </section>
 
@@ -157,14 +85,11 @@
   <div class="form-grid">
     <label>用户名<input name="web_username" value="{{.Cfg.web_username}}"></label>
     <label>新密码<input type="password" name="web_password" placeholder="留空表示不修改"></label>
-    <label>会话时长（小时）<input type="number" name="web_session_hours" value="{{.Cfg.web_session_hours}}"></label>
+    <label>会话时长（小时）<input type="number" name="web_session_hours" value="{{.Cfg.web_session_hours}}" min="1"></label>
   </div>
 </section>
 
-<div class="form-actions">
-  <button type="submit" class="primary">保存全部配置</button>
-  <span class="hint">也可以只保存某个模块：点击对应模块右上角的「保存」</span>
-</div>
 </form>
+<script src="/static/app.js"></script>
 {{end}}
 {{template "footer" .}}{{end}}

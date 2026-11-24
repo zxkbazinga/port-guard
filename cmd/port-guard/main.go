@@ -13,14 +13,11 @@ import (
 	"github.com/zxkbazinga/port-guard/internal/ban"
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
-	"github.com/zxkbazinga/port-guard/internal/ikuai"
 	"github.com/zxkbazinga/port-guard/internal/proxy"
 	"github.com/zxkbazinga/port-guard/internal/store"
 	"github.com/zxkbazinga/port-guard/internal/version"
 	"github.com/zxkbazinga/port-guard/internal/web"
 )
-
-const probePort = 22222 // 源 IP 验证端点，仅诊断用，不接检测引擎
 
 func main() {
 	listen := flag.String("listen", ":5657", "Web 管理界面监听地址")
@@ -61,7 +58,6 @@ func main() {
 		}
 	}
 	// 一次性迁移：旧版本默认保存了 30 天日志保留，按新默认策略收敛为 3 天。
-	// 仅执行一次（打标记），之后用户在配置页修改的值不会被覆盖。
 	if storedKeys, err := s.AllConfig(); err == nil {
 		if _, done := storedKeys["log_retention_migrated"]; !done {
 			if cfg.EventRetentionDays() > 3 {
@@ -72,57 +68,32 @@ func main() {
 		}
 	}
 
-	client := ikuai.New(cfg, logger)
-	manager := ban.New(cfg, logger, client, s)
+	manager := ban.New(cfg, logger, s)
 
-	// 检测引擎：告警回调 -> 代理本地封禁（即时生效）+ 封禁管理器（调爱快 API）
-	// 代理本地封禁不依赖 ban_mode 探测结果，保证串联模式下当场断开攻击连接。
+	// 检测引擎：告警回调 → 代理本地封禁（accept 阶段即时生效）+ 封禁记录
 	var proxyServer *proxy.Server
 	engine := detector.New(cfg, logger, func(a detector.Alert) {
-		if !a.NoBan && proxyServer != nil {
-			proxyServer.Block(a.IP, a.Minutes)
+		if proxyServer != nil {
+			proxyServer.Block(a.IP, 0)
 		}
 		go manager.HandleAlert(a)
 	})
 	proxyServer = proxy.New(cfg, logger, engine, s)
 
-	// 从数据库加载端口集合
-	ports, _ := s.ListPorts(true)
-	values := make([]int, 0, len(ports)*2)
-	for _, p := range ports {
-		values = append(values, p.ExternalPort, p.InternalPort)
-	}
-	engine.SetPorts(values)
-
-	sniffer := detector.NewSniffer(cfg, logger, engine)
 	syslogd := detector.NewSyslogReceiver(cfg, logger, engine)
-	decoy := detector.NewDecoyListener(cfg, logger, engine)
-	probe := detector.NewSourceProbe(logger, probePort)
-	poller := detector.NewPoller(cfg, logger, engine, client, s)
 
-	// 启动各检测源；抓包在不支持的环境下失败只告警，不阻断启动
-	if err := sniffer.Start(); err != nil {
-		logger.Warn("抓包检测不可用", "err", err)
-	}
+	// 启动检测源；Syslog 接收 NAS / Windows 转发的安全日志
 	if err := syslogd.Start(); err != nil {
 		logger.Warn("Syslog 接收不可用", "err", err)
-	}
-	if err := decoy.Start(); err != nil {
-		logger.Warn("诱饵端口监听不可用", "err", err)
-	}
-	if err := probe.Start(); err != nil {
-		logger.Warn("源 IP 探测端点不可用", "err", err)
 	}
 	if err := proxyServer.Reload(); err != nil {
 		logger.Warn("代理转发启动失败", "err", err)
 	}
-	poller.Start()
 	manager.Start()
 
 	webServer, err := web.NewServer(web.Components{
-		Cfg: cfg, Store: s, Client: client, Engine: engine,
-		Sniffer: sniffer, Syslog: syslogd, Decoy: decoy, Probe: probe, Proxy: proxyServer,
-		Poller: poller, Bans: manager, Log: logger,
+		Cfg: cfg, Store: s, Engine: engine, Syslog: syslogd, Proxy: proxyServer,
+		Bans: manager, Log: logger,
 	})
 	if err != nil {
 		logger.Error("初始化 Web 服务失败", "err", err)
@@ -143,7 +114,6 @@ func main() {
 	}()
 
 	// 日志清理：启动时立即清理一次，之后每 6 小时执行
-	// （事件日志按配置的保留天数清理，默认 3 天；同时清理已解除且过期的封禁历史）
 	prune := func() {
 		days := cfg.EventRetentionDays()
 		if days < 1 {
@@ -175,16 +145,11 @@ func main() {
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
 	manager.Stop()
-	poller.Stop()
 	syslogd.Stop()
 	proxyServer.Stop()
-	decoy.Stop()
-	probe.Stop()
-	sniffer.Stop()
 	logger.Info("Port Guard 已退出")
 }
 
 func hashDefaultPassword() (string, error) {
-	// 避免 main 包与 web 包循环依赖：直接复制最小哈希实现
 	return web.HashPassword("portguard")
 }

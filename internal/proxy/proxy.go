@@ -1,6 +1,6 @@
 // Package proxy 实现串联式 TCP 反向代理：爱快把外网端口映射到本应用的监听端口，
 // 代理在 accept 阶段做白名单/封禁判定，再把连接转发到内网真实服务。
-// 由于流量必经代理，检测引擎不再依赖爱快连接表接口或 syslog。
+// 由于流量必经代理，封禁在 accept 阶段本地即时生效，不依赖任何外部 API。
 package proxy
 
 import (
@@ -169,8 +169,8 @@ func (p *Server) handle(conn net.Conn, f store.Forward) {
 		return
 	}
 
-	// 2) 已封禁 IP：本地封禁表优先（告警回调直接写入，不依赖爱快 API），
-	//    其次查数据库里的封禁记录（手工封禁/爱快封禁同步）。
+	// 2) 已封禁 IP：本地封禁表优先（告警回调直接写入），
+	//    其次查数据库里的封禁记录（手工封禁 / 引擎告警封禁）。
 	if srcIP != "" && p.isLocallyBanned(srcIP) {
 		p.blocked.Add(1)
 		p.record(start, srcIP, f, backend, "本地封禁拒绝", time.Since(start))
@@ -192,7 +192,7 @@ func (p *Server) handle(conn net.Conn, f store.Forward) {
 			Kind: detector.KindConn, IP: srcIP, Port: f.ListenPort, Proto: "tcp",
 			Detail: "代理转发 " + f.Label,
 		}) {
-			// 引擎已判定攻击：本次连接也不放行（告警回调会同步调用爱快封禁）
+			// 引擎已判定攻击：本次连接也不放行（告警回调会同步写入封禁记录）
 			p.blocked.Add(1)
 			p.record(start, srcIP, f, backend, "检测拦截", time.Since(start))
 			p.log.Warn("代理拦截攻击连接", "ip", srcIP, "listen", f.ListenPort)

@@ -36,7 +36,6 @@ func TestSyslogLoginFailFormats(t *testing.T) {
 				t.Fatal(err)
 			}
 			eng := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), func(a Alert) { alerts = append(alerts, a) })
-			eng.SetPorts(nil) // 日志类事件不受端口过滤影响
 			r := NewSyslogReceiver(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), eng)
 			// 阈值默认 3 次，喂 3 条相同日志触发封禁
 			for i := 0; i < 3; i++ {

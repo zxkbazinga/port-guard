@@ -12,20 +12,13 @@ services:
     ports:
       - ${HOST_IP}:${APP_PORT_WEB}:5657/tcp
       - ${HOST_IP}:${APP_PORT_SYSLOG}:5140/udp
-      # 诱饵端口：在爱快把不用的 WAN 端口 DNAT 到本应用 IP 的这些容器端口
-      - ${HOST_IP}:22200:22200/tcp
-      - ${HOST_IP}:22201:22201/tcp
-      - ${HOST_IP}:22202:22202/tcp
-      - ${HOST_IP}:22203:22203/tcp
-      # 源 IP 验证端点（诊断用）：爱快映射一条 WAN 端口到这里，手机 4G 访问看来源 IP
-      - ${HOST_IP}:22222:22222/tcp
       # 转发代理监听端口池：爱快把外网端口 DNAT 到本应用 IP 的这些端口
       - ${HOST_IP}:22300-22349:22300-22349/tcp
     volumes:
       - ./data:/data
     env_file:
       - ./environment
-    # bridge 网络下抓包看不到外部转发流量，检测主力为连接表轮询 + Syslog
+    # 串联代理模式：流量必经本容器，封禁在 accept 阶段本地生效
     command: ["--listen", ":5657", "--data", "/data", "--log-level", "info"]
     logging:
       driver: "json-file"
