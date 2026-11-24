@@ -54,6 +54,38 @@ func TestConnectionSuccess(t *testing.T) {
 	}
 }
 
+func TestConnectionNewFirmware(t *testing.T) {
+	// 新固件登录响应：Result 是数字状态码，sess_key 由 Set-Cookie 返回
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/Action/login":
+			http.SetCookie(w, &http.Cookie{Name: "username", Value: "admin"})
+			http.SetCookie(w, &http.Cookie{Name: "sess_key", Value: "cookie-session-xyz"})
+			_, _ = w.Write([]byte(`{"Result":10000,"code":0,"message":"成功"}`))
+		case "/Action/call":
+			// 验证调用 API 时带上了从 Cookie 提取的 sess_key
+			ck, err := r.Cookie("sess_key")
+			if err != nil || ck.Value != "cookie-session-xyz" {
+				t.Errorf("调用 API 时 sess_key 不正确: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":[{"id":1,"external_port":8080,"internal_port":80}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	host, port := splitTestURL(t, srv.URL)
+
+	r := TestConnection(TestParams{Host: host, Port: port, Username: "admin", Password: "pass", Timeout: 2}, nil)
+	if !r.OK {
+		t.Fatalf("新固件格式应连接成功，实际失败：%+v", r.Steps)
+	}
+	if r.Mappings != 1 {
+		t.Fatalf("期望 1 条映射，实际 %d", r.Mappings)
+	}
+}
+
 func TestConnectionLoginFailed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

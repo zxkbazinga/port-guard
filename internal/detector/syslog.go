@@ -71,6 +71,7 @@ var (
 		"failed login", "login failed", "logon failure", "failed logon",
 		"登录失败", "密码错误", "登陆失败", "账号或密码错误", "无效用户",
 		"4625", "bad password", "incorrect password", "pam_unix(sshd:auth)",
+		"access denied", // MySQL / MariaDB: Access denied for user 'x'@'ip'
 	}
 )
 
@@ -141,6 +142,8 @@ var loginIPRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bfrom\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3})`),
 	regexp.MustCompile(`(?i)(?:source network address|source ip|client ip|源ip|登录源)[^\d]{0,12}([0-9]{1,3}(?:\.[0-9]{1,3}){3})`),
 	regexp.MustCompile(`(?i)\b(?:rhost|remote|ip)[=: ]+([0-9]{1,3}(?:\.[0-9]{1,3}){3})`),
+	// MySQL / MariaDB: Access denied for user 'root'@'203.0.113.5'
+	regexp.MustCompile(`(?i)@'([0-9]{1,3}(?:\.[0-9]{1,3}){3})'`),
 }
 
 func truncate(s string, n int) string {

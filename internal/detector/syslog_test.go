@@ -20,6 +20,7 @@ func TestSyslogLoginFailFormats(t *testing.T) {
 		{"pam auth failure", "Nov 24 10:00:00 host sshd[99]: pam_unix(sshd:auth): authentication failure; rhost=1.2.3.4 user=root", "1.2.3.4"},
 		{"windows 4625", "2026-11-24 10:00:00 Security 4625 An account failed to log on. Source Network Address: 5.6.7.8", "5.6.7.8"},
 		{"synology", "Nov 24 10:00:00 NAS SYSTEM: 登录失败, 来源 IP 9.8.7.6, 用户 admin", "9.8.7.6"},
+		{"mysql", "2026-11-24T10:00:00.000000Z 3 [ERROR] [MY-010926] [Server] Access denied for user 'root'@'203.0.113.5' (using password: YES)", "203.0.113.5"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

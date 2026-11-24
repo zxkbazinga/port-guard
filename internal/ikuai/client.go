@@ -78,6 +78,10 @@ func (c *Client) httpClient() *http.Client {
 
 // Login 登录并缓存 sess_key。同一 session 30 分钟内复用。
 // 导出以便连接测试能强制重新登录。
+//
+// 兼容两种固件响应：
+//   - 旧固件：{"Result":"<sess_key>","code":0}，sess_key 在 Result 字段
+//   - 新固件：{"Result":10000,"code":0,"message":"成功"}，sess_key 由 Set-Cookie 返回
 func (c *Client) Login(force bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -99,19 +103,47 @@ func (c *Client) Login(force bool) error {
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
+
+	// Result 既可能是字符串（旧固件 sess_key），也可能是数字（新固件状态码），用 RawMessage 兼容
 	var result struct {
-		Result  string `json:"Result"`
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Errcode int    `json:"errcode"`
+		Result  json.RawMessage `json:"Result"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Errcode int             `json:"errcode"`
+		SessKey string          `json:"sess_key"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return fmt.Errorf("解析登录响应失败: %w (%s)", err, string(data))
 	}
-	if result.Result == "" {
-		return fmt.Errorf("登录爱快失败: %s", string(data))
+	if result.Code != 0 || result.Errcode != 0 {
+		return fmt.Errorf("登录爱快失败(code=%d, errcode=%d): %s", result.Code, result.Errcode, result.Message)
 	}
-	c.session = result.Result
+
+	// sess_key 来源优先级：Set-Cookie > JSON 字段 > Result 字符串
+	sessKey := ""
+	for _, ck := range resp.Cookies() {
+		if strings.EqualFold(ck.Name, "sess_key") || strings.EqualFold(ck.Name, "sesskey") {
+			sessKey = ck.Value
+			break
+		}
+	}
+	if sessKey == "" {
+		sessKey = result.SessKey
+	}
+	if sessKey == "" && len(result.Result) > 0 {
+		var s string
+		if json.Unmarshal(result.Result, &s) == nil {
+			sessKey = s
+		}
+	}
+	if sessKey == "" {
+		cookieNames := make([]string, 0, len(resp.Cookies()))
+		for _, ck := range resp.Cookies() {
+			cookieNames = append(cookieNames, ck.Name)
+		}
+		return fmt.Errorf("登录已成功但未获取到 sess_key，响应: %s，Cookie 字段: %v", string(data), cookieNames)
+	}
+	c.session = sessKey
 	c.loggedAt = time.Now()
 	c.log.Debug("爱快登录成功")
 	return nil

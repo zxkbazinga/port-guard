@@ -144,6 +144,67 @@ Restart-Service nxlog
 
 ---
 
+## 四、MySQL / MariaDB（密码爆破）
+
+先明确检测边界：**端口扫描、高频连接、Flood 这类攻击不需要 MySQL 配合**，由 Port Guard 的连接表轮询 + 抓包自动识别。只有「同一个 IP 密码猜错 N 次」这种应用层爆破，才需要把 MySQL 的登录失败日志转发过来——因为从连接数上分不清是爆破还是正常客户端。
+
+MySQL 登录失败在 error log 里长这样，Port Guard 已能识别并提取来源 IP：
+
+```
+2026-11-24T10:00:00.000000Z 3 [ERROR] [MY-010926] [Server] Access denied for user 'root'@'203.0.113.5' (using password: YES)
+```
+
+### 方式 A：MySQL 直接写系统日志（MySQL 8.0 推荐）
+
+MySQL 8.0 默认**不**把错误日志写 syslog，需显式开启。在 MySQL 里执行：
+
+```sql
+INSTALL COMPONENT 'file://component_log_sink_syseventlog';
+SET PERSIST log_error_services = 'log_filter_internal; log_sink_syseventlog';
+```
+
+`SET PERSIST` 会写入 `mysqld-auto.cnf`，重启后依然生效。之后「Access denied」会出现在系统日志里，再按下面 Ubuntu 的方式把系统日志转发到 `<PG_IP>:5140` 即可。
+
+> MySQL 5.7 及更早版本没有组件机制，用 `log_syslog = ON`（老参数）或走方式 B。
+
+### 方式 B：rsyslog 读 MySQL 错误日志文件（通用，不改 MySQL 配置）
+
+不改动 MySQL，让 rsyslog 盯住 error log 文件转发：
+
+```bash
+sudo nano /etc/rsyslog.d/99-mysql-portguard.conf
+```
+
+写入（路径和 `<PG_IP>` 按实际改）：
+
+```
+module(load="imfile" Mode="inotify")
+input(type="imfile"
+      File="/var/log/mysql/error.log"
+      Tag="mysql"
+      Severity="error"
+      Facility="local6")
+local6.error  action(type="omfwd" target="<PG_IP>" port="5140" protocol="udp")
+```
+
+```bash
+sudo systemctl restart rsyslog
+```
+
+### 测试
+
+从另一台机器故意用错密码连 MySQL 三次：
+
+```bash
+mysql -h <MYSQL_IP> -u root -p   # 连续输错 3 次密码
+```
+
+到 Port Guard「事件日志」页，应出现「登录爆破行为」，来源是那台测试机的 IP。
+
+> 注意：如果 MySQL 前面还有一层代理（如群晖 Docker 的端口转发），日志里看到的可能是代理 IP 而非真实公网 IP，这种场景的爆破识别要靠连接层检测，别只依赖日志。
+
+---
+
 ## 常见问题
 
 **Q：配置完没反应？**
