@@ -74,7 +74,7 @@ func defaults() values {
 		PortRefresh: true, PortRefreshInt: 300,
 		WindowSeconds: 60, SynFloodThreshold: 30, PortScanThreshold: 8,
 		ConnRateThreshold: 60, UDPFloodThreshold: 80, AlertCooldown: 300,
-		EventRetentionDays: 30,
+		EventRetentionDays: 3,
 		LoginFailEnabled:   true, LoginFailThreshold: 3, LoginFailWindow: 300,
 	}
 }
@@ -275,6 +275,34 @@ func (c *Config) normalize() {
 	if c.c.LoginFailWindow < 30 {
 		c.c.LoginFailWindow = d.LoginFailWindow
 	}
+	// 日志保留至少 1 天，防止误填 0/负数导致清理逻辑异常
+	if c.c.EventRetentionDays < 1 {
+		c.c.EventRetentionDays = d.EventRetentionDays
+	}
+}
+
+// Ephemeral 是一次性连接测试所需的参数。
+type Ephemeral struct {
+	IKuaiHost     string
+	IKuaiPort     int
+	IKuaiSSL      bool
+	IKuaiUsername string
+	IKuaiPassword string
+	IKuaiTimeout  int
+}
+
+// NewEphemeral 构造一个不持久化的配置，供"测试连接"等临时场景使用。
+// 返回值没有绑定存储，不能调用 Update/SetPassword。
+func NewEphemeral(e Ephemeral) *Config {
+	c := &Config{c: defaults()}
+	c.c.IKuaiHost = e.IKuaiHost
+	c.c.IKuaiPort = e.IKuaiPort
+	c.c.IKuaiSSL = e.IKuaiSSL
+	c.c.IKuaiUsername = e.IKuaiUsername
+	c.c.IKuaiPassword = e.IKuaiPassword
+	c.c.IKuaiTimeout = e.IKuaiTimeout
+	c.normalize()
+	return c
 }
 
 // Snapshot 返回配置快照（用于页面渲染与 API）。密码字段会被脱敏。

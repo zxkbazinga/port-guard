@@ -57,6 +57,17 @@ func main() {
 			_ = cfg.SetPassword(hash)
 		}
 	}
+	// 一次性迁移：旧版本默认保存了 30 天日志保留，按新默认策略收敛为 3 天。
+	// 仅执行一次（打标记），之后用户在配置页修改的值不会被覆盖。
+	if storedKeys, err := s.AllConfig(); err == nil {
+		if _, done := storedKeys["log_retention_migrated"]; !done {
+			if cfg.EventRetentionDays() > 3 {
+				_ = cfg.Update(map[string]any{"event_retention_days": 3})
+				logger.Info("日志保留天数已按默认策略调整为 3 天，可在系统配置中修改")
+			}
+			_ = s.SetConfigs(map[string]any{"log_retention_migrated": true})
+		}
+	}
 
 	client := ikuai.New(cfg, logger)
 	manager := ban.New(cfg, logger, client, s)
@@ -110,14 +121,27 @@ func main() {
 		}
 	}()
 
-	// 每天清理过期日志
+	// 日志清理：启动时立即清理一次，之后每 6 小时执行
+	// （事件日志按配置的保留天数清理，默认 3 天；同时清理已解除且过期的封禁历史）
+	prune := func() {
+		days := cfg.EventRetentionDays()
+		if days < 1 {
+			return
+		}
+		if err := s.PruneEvents(days); err != nil {
+			logger.Warn("清理事件日志失败", "err", err)
+		}
+		if err := s.PruneOldBans(days); err != nil {
+			logger.Warn("清理封禁历史失败", "err", err)
+		}
+		logger.Info("日志清理完成", "retention_days", days)
+	}
+	prune()
 	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
+		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			if err := s.PruneEvents(cfg.EventRetentionDays()); err != nil {
-				logger.Warn("清理事件日志失败", "err", err)
-			}
+			prune()
 		}
 	}()
 

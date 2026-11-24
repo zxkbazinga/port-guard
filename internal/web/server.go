@@ -124,6 +124,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/bans", s.withAuth(s.apiBans))
 	s.mux.HandleFunc("GET /api/config", s.withAuth(s.apiConfigGet))
 	s.mux.HandleFunc("POST /api/config", s.withAuth(s.apiConfigSet))
+	s.mux.HandleFunc("POST /api/config/test-ikuai", s.withAuth(s.apiConfigTestIKuai))
 	s.mux.HandleFunc("GET /api/ports", s.withAuth(s.apiPorts))
 	s.mux.HandleFunc("POST /api/ports", s.withAuth(s.apiPortAdd))
 	s.mux.HandleFunc("DELETE /api/ports/{id}", s.withAuth(s.apiPortDelete))
@@ -320,6 +321,35 @@ func (s *Server) apiConfigSet(w http.ResponseWriter, r *http.Request) {
 	s.engine.Reset()
 	s.client.ResetProbe()
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// apiConfigTestIKuai 使用请求中填写的参数测试爱快连接，不保存配置。
+// 密码字段留空时沿用当前已保存的密码（页面不回显密码）。
+func (s *Server) apiConfigTestIKuai(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		Host     string `json:"ikuai_host"`
+		Port     int    `json:"ikuai_port"`
+		SSL      bool   `json:"ikuai_ssl"`
+		Username string `json:"ikuai_username"`
+		Password string `json:"ikuai_password"`
+		Timeout  int    `json:"ikuai_timeout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeJSON(w, 400, map[string]any{"error": "请求格式错误: " + err.Error()})
+		return
+	}
+	savedUser, savedPass, _ := s.cfg.IKuaiCreds()
+	if strings.TrimSpace(p.Username) == "" {
+		p.Username = savedUser
+	}
+	if p.Password == "" {
+		p.Password = savedPass
+	}
+	result := ikuai.TestConnection(ikuai.TestParams{
+		Host: strings.TrimSpace(p.Host), Port: p.Port, SSL: p.SSL,
+		Username: strings.TrimSpace(p.Username), Password: p.Password, Timeout: p.Timeout,
+	}, s.log)
+	writeJSON(w, 200, result)
 }
 
 func (s *Server) apiPorts(w http.ResponseWriter, _ *http.Request) {

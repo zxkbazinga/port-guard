@@ -76,8 +76,9 @@ func (c *Client) httpClient() *http.Client {
 	}
 }
 
-// login 登录并缓存 sess_key。同一 session 30 分钟内复用。
-func (c *Client) login(force bool) error {
+// Login 登录并缓存 sess_key。同一 session 30 分钟内复用。
+// 导出以便连接测试能强制重新登录。
+func (c *Client) Login(force bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !force && c.session != "" && time.Since(c.loggedAt) < 30*time.Minute {
@@ -118,7 +119,7 @@ func (c *Client) login(force bool) error {
 
 // Call 调用爱快 API。action 通常为 show / add / del / edit。
 func (c *Client) Call(funcName, action string, param map[string]any) (json.RawMessage, error) {
-	if err := c.login(false); err != nil {
+	if err := c.Login(false); err != nil {
 		return nil, err
 	}
 	payload := map[string]any{"func_name": funcName, "action": action, "param": param}
@@ -152,7 +153,7 @@ func (c *Client) Call(funcName, action string, param map[string]any) (json.RawMe
 		}
 		// 登录失效的典型响应
 		if bytes.Contains(data, []byte("sess_key")) && bytes.Contains(data, []byte("fail")) {
-			if err := c.login(true); err != nil {
+			if err := c.Login(true); err != nil {
 				return nil, err
 			}
 			continue

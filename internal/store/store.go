@@ -320,6 +320,15 @@ func (s *Store) PruneEvents(days int) error {
 	return err
 }
 
+// PruneOldBans 清理已解除且到期超过 days 天的封禁历史，防止表无限增长。
+func (s *Store) PruneOldBans(days int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Unix() - int64(days)*86400
+	_, err := s.db.Exec("DELETE FROM bans WHERE active = 0 AND expires_at < ?", cutoff)
+	return err
+}
+
 // ------------------------------------------------------------------ bans --
 
 func (s *Store) GetBan(ip string) (*Ban, error) {

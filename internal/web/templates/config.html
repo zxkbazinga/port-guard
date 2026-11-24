@@ -15,6 +15,11 @@
     <label class="check"><input type="checkbox" name="ikuai_ssl" {{checked .Cfg.ikuai_ssl}}> 使用 HTTPS</label>
     <label>超时（秒）<input type="number" name="ikuai_timeout" value="{{.Cfg.ikuai_timeout}}"></label>
   </div>
+  <div class="test-row">
+    <button type="button" class="btn" id="ikuai-test-btn">测试连接</button>
+    <span class="hint">用上方填写的参数测试，不会保存配置；密码留空则使用已保存的密码</span>
+  </div>
+  <div id="ikuai-test-result" class="alert" hidden></div>
 </section>
 
 <section class="panel">
@@ -71,7 +76,7 @@
     <label>连接频率阈值<input type="number" name="conn_rate_threshold" value="{{.Cfg.conn_rate_threshold}}"></label>
     <label>UDP Flood 阈值<input type="number" name="udp_flood_threshold" value="{{.Cfg.udp_flood_threshold}}"></label>
     <label>同一 IP 告警冷却（秒）<input type="number" name="alert_cooldown_seconds" value="{{.Cfg.alert_cooldown_seconds}}"></label>
-    <label>日志保留天数<input type="number" name="event_retention_days" value="{{.Cfg.event_retention_days}}"></label>
+    <label>日志保留天数（默认 3 天，自动清理）<input type="number" name="event_retention_days" value="{{.Cfg.event_retention_days}}" min="1"></label>
   </div>
 </section>
 
