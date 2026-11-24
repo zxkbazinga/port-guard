@@ -7,15 +7,19 @@ Port Guard - 爱快端口映射防护（Docker 应用）
 安装后请在应用配置页填写：
 1. 爱快管理地址（本机安装填 127.0.0.1）、管理端口、API 账号和密码
 2. Web 管理端口 APP_PORT_WEB（默认 8080，注意不要与爱快自身端口冲突）
-3. 封禁时长（默认 30 分钟）、封禁方式（默认自动探测）
-4. 检测开关与阈值（一般保持默认即可）
+3. Syslog 接收端口 APP_PORT_SYSLOG（UDP，默认 5140，给群晖/Windows/Ubuntu 转发日志用）
+4. 封禁时长（默认 30 分钟）、封禁方式（默认自动探测）
+5. 检测开关与阈值（一般保持默认即可）
 
 配置保存后应用会自动重启。管理界面默认账号 admin / portguard，登录后请立即修改密码。
 
-容器使用 host 网络并申请 NET_RAW / NET_ADMIN 能力，因此：
-- AF_PACKET 抓包可识别 SYN Flood / 端口扫描
-- Syslog 直接监听宿主 UDP 5140 端口
-- 可选轮询爱快连接表
+网络说明：
+爱快 Docker 插件禁止使用宿主网络，容器采用标准 bridge 网络 + 端口映射。因此：
+- 连接表轮询（默认开启）作为主力检测源，按源 IP 统计连接频率
+- Syslog 通过端口映射接收，映射端口见 APP_PORT_SYSLOG
+- AF_PACKET 抓包在 bridge 下看不到外部转发流量，已默认关闭
 - 命中规则后调用爱快黑名单/ACL 接口封禁源 IP，到期自动解封
 
+请保持「轮询爱快连接表」开启（PG_CONN_POLL_ENABLED=1），否则检测能力会下降。
+日志转发配置见：https://github.com/zxkbazinga/port-guard/blob/main/docs/LOG-FORWARDING.md
 详细文档：https://github.com/zxkbazinga/port-guard

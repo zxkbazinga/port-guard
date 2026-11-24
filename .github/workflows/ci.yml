@@ -59,3 +59,8 @@ jobs:
           print(f'Docker 应用配置校验通过，共 {len(opts)} 项配置')
           "
           grep -q 'image: ghcr.io/zxkbazinga/port-guard:' ikuai-support/port-guard/app/docker-compose.yaml
+          if grep -qE 'network_mode:|cap_add:|privileged:' ikuai-support/port-guard/app/docker-compose.yaml; then
+            echo "爱快 Docker 应用禁止 network_mode/cap_add/privileged" >&2
+            exit 1
+          fi
+          grep -q 'ports:' ikuai-support/port-guard/app/docker-compose.yaml

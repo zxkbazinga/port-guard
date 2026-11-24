@@ -10,7 +10,7 @@
 
 - **实时识别**：按源 IP 统计滑动窗口内的连接行为，命中规则立即封禁
 - **动态解封**：调用爱快原生黑名单（按分钟生效）或 ACL 规则，到期自动恢复
-- **多数据源**：抓包（精准）、Syslog（实时）、连接表轮询（兜底）三路融合
+- **多数据源**：连接表轮询、Syslog（实时）两路融合；独立部署且网络条件允许时可再开启 AF_PACKET 抓包
 - **登录爆破防护**：接收群晖 / Windows / Ubuntu 转发的登录失败日志，同一 IP 失败 3 次即封禁
 - **抑制误封**：私网地址、白名单 CIDR、非映射端口的流量一律不参与判定
 
@@ -20,9 +20,9 @@
 
 | 数据源 | 说明 | 依赖条件 |
 |---|---|---|
-| **AF_PACKET 抓包**（主力） | 直接分析发往映射端口的 SYN / UDP 包，识别 SYN Flood、横向端口扫描 | 容器 host 网络 + `NET_RAW` 能力 |
-| **Syslog 接收** | 爱快推送的安全告警、ACL 拒绝日志，以及群晖 / Windows / Ubuntu 转发的登录失败日志 | 各设备配置日志服务器指向 Port Guard 的 UDP 5140 |
-| **连接表轮询**（兜底） | 定期拉取爱快会话表，按源 IP 统计新建连接频率 | 固件支持连接表 API |
+| **连接表轮询**（主力） | 定期拉取爱快会话表，按源 IP 统计新建连接频率与端口分散度 | 固件支持连接表 API，默认开启 |
+| **Syslog 接收**（主力） | 爱快推送的安全告警、ACL 拒绝日志，以及群晖 / Windows / Ubuntu 转发的登录失败日志 | 各设备配置日志服务器指向 Port Guard 的 UDP 5140 |
+| **AF_PACKET 抓包**（可选增强） | 直接分析发往映射端口的 SYN / UDP 包，识别 SYN Flood、横向端口扫描 | 需 host 网络 + `NET_RAW`；爱快官方 Docker 应用禁止 host 网络，故应用市场部署下不可用 |
 
 三路事件统一进入检测引擎，按滑动窗口（默认 60 秒）统计，命中以下任一规则即告警：
 
@@ -45,9 +45,11 @@
 
 前提：爱快已安装并启用 **Docker 插件**。然后进入 **扩展服务 → 应用市场 → 本地安装**，上传 Release 中的 `port-guard-<版本>-ikuai.ipkg`。
 
-ipkg 是 Docker 类型应用（`manifest.json` 中 `type: "1"`），安装后会自动从 `ghcr.io/zxkbazinga/port-guard:<版本>` 拉取镜像并创建容器。容器使用 `network_mode: host`，因此抓包（AF_PACKET）和 Syslog 接收能力完整。
+ipkg 是 Docker 类型应用（`manifest.json` 中 `type: "1"`），安装后会自动从 `ghcr.io/zxkbazinga/port-guard:<版本>` 拉取镜像并创建容器。爱快 Docker 插件**禁止使用宿主网络**，因此容器用标准 bridge 网络 + 端口映射：Web 管理端口（默认 8080）和 Syslog 接收端口（UDP 5140）都可在应用配置页修改。
 
-安装后在应用配置页填写爱快管理地址（本机装填 `127.0.0.1`）、管理端口、API 账号密码，封禁时长默认 30 分钟可直接改。保存后应用自动重启，点击应用详情页的「打开」即可进入 Web 管理界面（默认端口 8080，可在 `APP_PORT_WEB` 修改）。
+> **重要**：bridge 网络下 AF_PACKET 抓包看不到经爱快转发的外部流量，所以应用市场部署下抓包已默认关闭，检测主力是**连接表轮询 + Syslog**（登录爆破防护照常工作）。这是爱快平台的硬性限制，不是功能缺失。
+
+安装后在应用配置页填写爱快管理地址（本机装填 `127.0.0.1`）、管理端口、API 账号密码，封禁时长默认 30 分钟可直接改。保存后应用自动重启，点击应用详情页的「打开」即可进入 Web 管理界面（默认端口 8080，可在 `APP_PORT_WEB` 修改）。请确保「轮询爱快连接表」保持开启（`PG_CONN_POLL_ENABLED=1`，默认已开）。
 
 > 如果你的固件不提供本地安装入口，直接用「方式 B」的 Docker Compose 部署，功能完全一致。
 
@@ -58,9 +60,9 @@ docker pull ghcr.io/zxkbazinga/port-guard:latest
 docker compose up -d
 ```
 
-默认使用 `network_mode: host`，Web 界面监听爱快的 **8080** 端口：`http://<爱快LAN-IP>:8080`
+默认用 `ports` 端口映射（爱快 Docker 插件禁止宿主网络），Web 界面监听 **8080**、Syslog 监听 UDP **5140**：`http://<爱快LAN-IP>:8080`
 
-> 如果不想用 host 网络，把 `docker-compose.yml` 里的 `network_mode: host` 注释掉，启用下面的 `ports` 映射。此时抓包不可用，但 Syslog + API 轮询仍可正常工作。
+> 这种方式下抓包不可用，但连接表轮询 + Syslog 仍可正常工作。若你在普通 Linux 主机上自建、且确实需要抓包，可自行把 `docker-compose.yml` 改为宿主网络并开启 `PG_SNIFFER_ENABLED=1`。
 
 默认账号：`admin` / `portguard` —— **登录后请立即在「系统配置 → 管理界面」修改密码**。
 
@@ -175,7 +177,7 @@ make build   # 本地构建单个二进制
 
 - 爱快不同固件版本的 API 字段名存在差异。封禁接口通过多形态探测自动适配；如果全部失败，请在 Web 界面手动指定 `ban_mode`，或提交 Issue 附上固件版本和 API 返回内容。
 - `conn_poll_enabled` 依赖固件是否提供连接表接口（`func_name` 默认 `monitor_conn`），可在配置中修改。
-- AF_PACKET 抓包在部分爱快 Docker 环境中可能受内核能力限制；此时程序自动降级到 Syslog + API 检测。
+- 爱快官方 Docker 应用禁止宿主网络（`network_mode: host`），因此通过应用市场 ipkg 部署时 AF_PACKET 抓包不可用（已默认关闭）；检测由连接表轮询 + Syslog 承担。只有在普通 Linux 主机上自建并改用宿主网络时，抓包才可用。
 
 ## License
 

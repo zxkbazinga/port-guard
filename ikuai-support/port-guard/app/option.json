@@ -120,13 +120,13 @@
   {
     "attrname": "PG_SNIFFER_ENABLED",
     "label": {
-      "en": "Enable AF_PACKET capture (1/0)",
-      "zh": "启用抓包检测（1/0）"
+      "en": "Enable AF_PACKET capture (bridge mode cannot see forwarded traffic, keep 0)",
+      "zh": "启用抓包检测（bridge 网络看不到转发流量，建议保持 0）"
     },
     "type": "integer",
     "scope": "environment",
     "required": false,
-    "default": 1,
+    "default": 0,
     "min": 0,
     "max": 1
   },
@@ -170,13 +170,13 @@
   {
     "attrname": "PG_CONN_POLL_ENABLED",
     "label": {
-      "en": "Poll iKuai connection table (1/0)",
-      "zh": "轮询爱快连接表（1/0）"
+      "en": "Poll iKuai connection table (1/0) - primary detection in bridge mode",
+      "zh": "轮询爱快连接表（1/0，bridge 模式下的主力检测）"
     },
     "type": "integer",
     "scope": "environment",
     "required": false,
-    "default": 0,
+    "default": 1,
     "min": 0,
     "max": 1
   },
@@ -331,5 +331,18 @@
     "default": 300,
     "min": 30,
     "max": 86400
+  },
+  {
+    "attrname": "APP_PORT_SYSLOG",
+    "label": {
+      "en": "Syslog UDP port (host)",
+      "zh": "Syslog 接收端口（UDP，宿主）"
+    },
+    "type": "integer",
+    "scope": "config",
+    "required": true,
+    "default": 5140,
+    "min": 1024,
+    "max": 65535
   }
 ]
