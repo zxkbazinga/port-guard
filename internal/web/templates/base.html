@@ -1,0 +1,26 @@
+{{define "header"}}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Port Guard</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="shield">◈</span> Port Guard <small>爱快端口映射防护</small></div>
+  <nav>
+    <a href="/" class="{{if eq .Title "概览"}}active{{end}}">概览</a>
+    <a href="/events" class="{{if eq .Title "事件日志"}}active{{end}}">事件日志</a>
+    <a href="/bans" class="{{if eq .Title "封禁管理"}}active{{end}}">封禁管理</a>
+    <a href="/config" class="{{if eq .Title "系统配置"}}active{{end}}">系统配置</a>
+    <a href="/logout" class="muted">退出</a>
+  </nav>
+</header>
+<main class="container">{{end}}
+
+{{define "footer"}}</main>
+<footer class="footer">Port Guard · 让暴露的端口不再裸奔</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>{{end}}

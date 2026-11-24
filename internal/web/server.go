@@ -1,0 +1,442 @@
+// Package web 提供 Web 管理界面与 HTTP API。
+package web
+
+import (
+	"embed"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/zxkbazinga/port-guard/internal/ban"
+	"github.com/zxkbazinga/port-guard/internal/config"
+	"github.com/zxkbazinga/port-guard/internal/detector"
+	"github.com/zxkbazinga/port-guard/internal/ikuai"
+	"github.com/zxkbazinga/port-guard/internal/store"
+)
+
+//go:embed templates/*.html
+var templatesFS embed.FS
+
+//go:embed static/*
+var staticFS embed.FS
+
+// Server 是 Web 服务。
+type Server struct {
+	cfg      *config.Config
+	store    *store.Store
+	client   *ikuai.Client
+	engine   *detector.Engine
+	sniffer  *detector.Sniffer
+	syslog   *detector.SyslogReceiver
+	poller   *detector.Poller
+	bans     *ban.Manager
+	log      *slog.Logger
+	sessions *sessionStore
+	tmpl     *template.Template
+	mux      *http.ServeMux
+}
+
+type Components struct {
+	Cfg     *config.Config
+	Store   *store.Store
+	Client  *ikuai.Client
+	Engine  *detector.Engine
+	Sniffer *detector.Sniffer
+	Syslog  *detector.SyslogReceiver
+	Poller  *detector.Poller
+	Bans    *ban.Manager
+	Log     *slog.Logger
+}
+
+func NewServer(c Components) (*Server, error) {
+	funcs := template.FuncMap{
+		"formatTime": func(ts int64) string {
+			if ts == 0 {
+				return "-"
+			}
+			return time.Unix(ts, 0).Format("2006-01-02 15:04:05")
+		},
+		"countdown": func(expiry int64) string {
+			d := time.Until(time.Unix(expiry, 0))
+			if d <= 0 {
+				return "已到期"
+			}
+			return d.Round(time.Second).String()
+		},
+		"checked": func(v bool) string {
+			if v {
+				return "checked"
+			}
+			return ""
+		},
+		"selected": func(a, b string) string {
+			if a == b {
+				return "selected"
+			}
+			return ""
+		},
+	}
+	tmpl, err := template.New("").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{
+		cfg: c.Cfg, store: c.Store, client: c.Client, engine: c.Engine,
+		sniffer: c.Sniffer, syslog: c.Syslog, poller: c.Poller, bans: c.Bans,
+		log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
+	}
+	s.routes()
+	return s, nil
+}
+
+func (s *Server) Handler() http.Handler {
+	// 静态资源无需认证
+	static, _ := fs.Sub(staticFS, "static")
+	fileServer := http.FileServer(http.FS(static))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/static/") {
+			http.StripPrefix("/static/", fileServer).ServeHTTP(w, r)
+			return
+		}
+		s.mux.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) routes() {
+	s.mux.HandleFunc("GET /login", s.loginPage)
+	s.mux.HandleFunc("POST /login", s.loginSubmit)
+	s.mux.HandleFunc("GET /logout", s.logout)
+	s.mux.HandleFunc("GET /", s.withAuth(s.dashboard))
+	s.mux.HandleFunc("GET /config", s.withAuth(s.configPage))
+	s.mux.HandleFunc("POST /config", s.withAuth(s.configSave))
+	s.mux.HandleFunc("GET /events", s.withAuth(s.eventsPage))
+	s.mux.HandleFunc("GET /bans", s.withAuth(s.bansPage))
+	// API
+	s.mux.HandleFunc("GET /api/status", s.withAuth(s.apiStatus))
+	s.mux.HandleFunc("GET /api/events", s.withAuth(s.apiEvents))
+	s.mux.HandleFunc("GET /api/bans", s.withAuth(s.apiBans))
+	s.mux.HandleFunc("GET /api/config", s.withAuth(s.apiConfigGet))
+	s.mux.HandleFunc("POST /api/config", s.withAuth(s.apiConfigSet))
+	s.mux.HandleFunc("GET /api/ports", s.withAuth(s.apiPorts))
+	s.mux.HandleFunc("POST /api/ports", s.withAuth(s.apiPortAdd))
+	s.mux.HandleFunc("DELETE /api/ports/{id}", s.withAuth(s.apiPortDelete))
+	s.mux.HandleFunc("POST /api/ban", s.withAuth(s.apiBan))
+	s.mux.HandleFunc("POST /api/unban", s.withAuth(s.apiUnban))
+	s.mux.HandleFunc("POST /api/probe", s.withAuth(s.apiProbe))
+	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+}
+
+// ------------------------------------------------------------------ auth --
+
+func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("pg_session")
+		if err != nil || !s.sessions.valid(cookie.Value) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "未登录"})
+			} else {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+			}
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "login.html", map[string]any{"Error": ""})
+}
+
+func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+	if username != s.cfg.WebUsername() || !verifyPassword(password, s.cfg.WebPasswordHash()) {
+		s.render(w, "login.html", map[string]any{"Error": "用户名或密码错误"})
+		return
+	}
+	token := s.sessions.create(time.Duration(s.cfg.WebSessionHours()) * time.Hour)
+	http.SetCookie(w, &http.Cookie{Name: "pg_session", Value: token, Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Expires: time.Now().Add(time.Duration(s.cfg.WebSessionHours()) * time.Hour)})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie("pg_session"); err == nil {
+		s.sessions.remove(cookie.Value)
+	}
+	http.SetCookie(w, &http.Cookie{Name: "pg_session", Value: "", Path: "/", MaxAge: -1})
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// ----------------------------------------------------------------- pages --
+
+func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
+	bans, _ := s.store.ListBans(true)
+	events, _ := s.store.ListEvents(8, 0, "")
+	ports, _ := s.store.ListPorts(true)
+	activeBans, _ := s.store.ActiveBanCount()
+	attacks, _ := s.store.EventCount("attack", time.Now().Add(-24*time.Hour).Unix())
+	s.render(w, "dashboard.html", map[string]any{
+		"Title":  "概览",
+		"Active": activeBans, "Attacks24h": attacks, "Ports": len(ports),
+		"Bans": bans, "Events": events, "Mode": s.client.Mode(),
+		"Sniffer": s.sniffer.Stats(), "Syslog": s.syslog.Stats(),
+		"Poller": s.poller.Stats(), "BanStats": s.bans.Stats(),
+		"Enabled": s.cfg.DetectionEnabled(),
+	})
+}
+
+func (s *Server) configPage(w http.ResponseWriter, _ *http.Request) {
+	s.render(w, "config.html", map[string]any{
+		"Title": "系统配置",
+		"Cfg":   s.cfg.Snapshot(true),
+		"Mode":  s.client.Mode(),
+		"Saved": false,
+	})
+}
+
+func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	updates := map[string]any{}
+	boolKeys := []string{"ikuai_ssl", "ignore_private_ips", "detection_enabled", "sniffer_enabled",
+		"syslog_enabled", "conn_poll_enabled", "port_refresh_enabled"}
+	for _, k := range boolKeys {
+		updates[k] = r.FormValue(k) == "on" || r.FormValue(k) == "1"
+	}
+	intKeys := []string{"ikuai_port", "ikuai_timeout", "ban_duration_minutes", "syslog_port",
+		"conn_poll_interval", "port_refresh_interval", "window_seconds", "syn_flood_threshold",
+		"port_scan_threshold", "conn_rate_threshold", "udp_flood_threshold",
+		"alert_cooldown_seconds", "event_retention_days", "web_session_hours"}
+	for _, k := range intKeys {
+		n, _ := strconv.Atoi(r.FormValue(k))
+		updates[k] = n
+	}
+	strKeys := []string{"ikuai_host", "ikuai_username", "whitelist", "ban_mode",
+		"sniffer_iface", "conn_func_name", "web_username"}
+	for _, k := range strKeys {
+		updates[k] = strings.TrimSpace(r.FormValue(k))
+	}
+	if pw := r.FormValue("ikuai_password"); pw != "" {
+		updates["ikuai_password"] = pw
+	}
+	if pw := r.FormValue("web_password"); pw != "" {
+		hash, err := HashPassword(pw)
+		if err == nil {
+			updates["web_password_hash"] = hash
+		}
+	}
+	if err := s.cfg.Update(updates); err != nil {
+		s.log.Error("保存配置失败", "err", err)
+	}
+	// 配置变更后重置引擎状态与 API 探测
+	s.engine.Reset()
+	s.client.ResetProbe()
+	s.render(w, "config.html", map[string]any{
+		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Mode": s.client.Mode(), "Saved": true,
+	})
+}
+
+func (s *Server) eventsPage(w http.ResponseWriter, r *http.Request) {
+	typ := r.URL.Query().Get("type")
+	events, _ := s.store.ListEvents(200, 0, typ)
+	s.render(w, "events.html", map[string]any{"Title": "事件日志", "Events": events, "Type": typ})
+}
+
+func (s *Server) bansPage(w http.ResponseWriter, _ *http.Request) {
+	bans, _ := s.store.ListBans(false)
+	s.render(w, "bans.html", map[string]any{"Title": "封禁管理", "Bans": bans})
+}
+
+// ------------------------------------------------------------------- API --
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
+	activeBans, _ := s.store.ActiveBanCount()
+	attacks, _ := s.store.EventCount("attack", time.Now().Add(-24*time.Hour).Unix())
+	ports, _ := s.store.ListPorts(true)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": s.cfg.DetectionEnabled(), "ban_mode": s.client.Mode(),
+		"active_bans": activeBans, "attacks_24h": attacks, "monitored_ports": len(ports),
+		"sniffer": s.sniffer.Stats(), "syslog": s.syslog.Stats(),
+		"poller": s.poller.Stats(), "engine": s.engine.Stats(), "ban": s.bans.Stats(),
+	})
+}
+
+func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 1000 {
+		limit = 100
+	}
+	events, err := s.store.ListEvents(limit, 0, r.URL.Query().Get("type"))
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, events)
+}
+
+func (s *Server) apiBans(w http.ResponseWriter, _ *http.Request) {
+	bans, err := s.store.ListBans(false)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, bans)
+}
+
+func (s *Server) apiConfigGet(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, s.cfg.Snapshot(true))
+}
+
+func (s *Server) apiConfigSet(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.cfg.Update(payload); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	s.engine.Reset()
+	s.client.ResetProbe()
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) apiPorts(w http.ResponseWriter, _ *http.Request) {
+	ports, err := s.store.ListPorts(false)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, ports)
+}
+
+func (s *Server) apiPortAdd(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		ExternalPort int    `json:"external_port"`
+		InternalPort int    `json:"internal_port"`
+		InternalIP   string `json:"internal_ip"`
+		Protocol     string `json:"protocol"`
+		Label        string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	if p.ExternalPort < 1 || p.ExternalPort > 65535 {
+		writeJSON(w, 400, map[string]any{"error": "外部端口无效"})
+		return
+	}
+	if p.InternalPort == 0 {
+		p.InternalPort = p.ExternalPort
+	}
+	if p.Protocol == "" {
+		p.Protocol = "tcp"
+	}
+	err := s.store.UpsertPort(store.Port{
+		ExternalPort: p.ExternalPort, InternalPort: p.InternalPort, InternalIP: p.InternalIP,
+		Protocol: p.Protocol, Label: p.Label, Enabled: true, Source: "manual",
+	})
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	s.portSync()
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) apiPortDelete(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := s.store.DeletePort(id); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	s.portSync()
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) portSync() {
+	ports, _ := s.store.ListPorts(true)
+	values := make([]int, 0, len(ports)*2)
+	for _, p := range ports {
+		values = append(values, p.ExternalPort, p.InternalPort)
+	}
+	s.engine.SetPorts(values)
+}
+
+func (s *Server) apiBan(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		IP      string `json:"ip"`
+		Minutes int    `json:"minutes"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	if p.IP == "" {
+		writeJSON(w, 400, map[string]any{"error": "ip 必填"})
+		return
+	}
+	if p.Reason == "" {
+		p.Reason = "手工封禁"
+	}
+	if err := s.bans.ManualBan(p.IP, p.Minutes, p.Reason); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) apiUnban(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		IP string `json:"ip"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.bans.Unban(p.IP); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) apiProbe(w http.ResponseWriter, _ *http.Request) {
+	s.client.ResetProbe()
+	// 触发一次探测：用空封禁（none 模式除外）
+	mode := s.cfg.BanMode()
+	if mode == "none" {
+		writeJSON(w, 200, map[string]any{"mode": "none"})
+		return
+	}
+	_, err := s.client.Ban("203.0.113.254", 1, "port-guard probe")
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	_ = s.client.Unban("203.0.113.254", "")
+	writeJSON(w, 200, map[string]any{"mode": s.client.Mode()})
+}
+
+func (s *Server) render(w http.ResponseWriter, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
+		s.log.Error("渲染模板失败", "template", name, "err", err)
+		fmt.Fprint(w, "页面渲染失败，请查看日志")
+	}
+}

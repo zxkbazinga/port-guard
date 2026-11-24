@@ -1,0 +1,6 @@
+.git
+.gitignore
+bin/
+data/
+*.md
+.DS_Store

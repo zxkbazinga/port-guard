@@ -1,0 +1,80 @@
+{{define "config.html"}}{{template "header" .}}
+{{with .}}
+<div class="page-head"><h1>系统配置</h1></div>
+{{if .Saved}}<div class="alert success">配置已保存并生效</div>{{end}}
+<form method="post" action="/config" class="config-form">
+
+<section class="panel">
+  <h2>爱快路由器连接</h2>
+  <p class="desc">用于拉取端口映射、连接表，以及下发/解除封禁。建议在爱快中创建专门的管理账号。</p>
+  <div class="form-grid">
+    <label>管理地址<input name="ikuai_host" value="{{.Cfg.ikuai_host}}" placeholder="192.168.1.1"></label>
+    <label>端口<input type="number" name="ikuai_port" value="{{.Cfg.ikuai_port}}"></label>
+    <label>用户名<input name="ikuai_username" value="{{.Cfg.ikuai_username}}"></label>
+    <label>密码<input type="password" name="ikuai_password" placeholder="留空表示不修改"></label>
+    <label class="check"><input type="checkbox" name="ikuai_ssl" {{checked .Cfg.ikuai_ssl}}> 使用 HTTPS</label>
+    <label>超时（秒）<input type="number" name="ikuai_timeout" value="{{.Cfg.ikuai_timeout}}"></label>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>封禁策略</h2>
+  <div class="form-grid">
+    <label>封禁时长（分钟）<input type="number" name="ban_duration_minutes" value="{{.Cfg.ban_duration_minutes}}" min="1"></label>
+    <label>封禁方式
+      <select name="ban_mode">
+        <option value="auto" {{selected .Cfg.ban_mode "auto"}}>自动探测（推荐）</option>
+        <option value="blacklist" {{selected .Cfg.ban_mode "blacklist"}}>安全防护黑名单</option>
+        <option value="acl" {{selected .Cfg.ban_mode "acl"}}>ACL 禁止规则</option>
+        <option value="none" {{selected .Cfg.ban_mode "none"}}>只告警不封禁</option>
+      </select>
+    </label>
+    <label class="full">白名单（CIDR，逗号分隔，不封禁）<input name="whitelist" value="{{.Cfg.whitelist}}"></label>
+    <label class="check"><input type="checkbox" name="ignore_private_ips" {{checked .Cfg.ignore_private_ips}}> 忽略私网地址（防止误封内网）</label>
+  </div>
+  <p class="hint">当前检测到的封禁方式：<strong>{{.Mode}}</strong>。如果探测失败，可手动指定封禁方式后保存。</p>
+</section>
+
+<section class="panel">
+  <h2>检测源</h2>
+  <div class="form-grid">
+    <label class="check"><input type="checkbox" name="detection_enabled" {{checked .Cfg.detection_enabled}}> 启用攻击检测</label>
+    <label class="check"><input type="checkbox" name="sniffer_enabled" {{checked .Cfg.sniffer_enabled}}> 抓包检测（需 host 网络）</label>
+    <label>抓包网卡<input name="sniffer_iface" value="{{.Cfg.sniffer_iface}}" placeholder="any"></label>
+    <label class="check"><input type="checkbox" name="syslog_enabled" {{checked .Cfg.syslog_enabled}}> 接收爱快 Syslog</label>
+    <label>Syslog 端口<input type="number" name="syslog_port" value="{{.Cfg.syslog_port}}"></label>
+    <label class="check"><input type="checkbox" name="conn_poll_enabled" {{checked .Cfg.conn_poll_enabled}}> 轮询爱快连接表</label>
+    <label>连接表接口 func_name<input name="conn_func_name" value="{{.Cfg.conn_func_name}}"></label>
+    <label>轮询间隔（秒）<input type="number" name="conn_poll_interval" value="{{.Cfg.conn_poll_interval}}"></label>
+    <label class="check"><input type="checkbox" name="port_refresh_enabled" {{checked .Cfg.port_refresh_enabled}}> 自动同步端口映射</label>
+    <label>同步间隔（秒）<input type="number" name="port_refresh_interval" value="{{.Cfg.port_refresh_interval}}"></label>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>检测阈值</h2>
+  <p class="desc">统计窗口内超过阈值即判定为攻击并自动封禁。数值越大越保守。</p>
+  <div class="form-grid">
+    <label>统计窗口（秒）<input type="number" name="window_seconds" value="{{.Cfg.window_seconds}}"></label>
+    <label>SYN Flood 阈值<input type="number" name="syn_flood_threshold" value="{{.Cfg.syn_flood_threshold}}"></label>
+    <label>端口扫描阈值（不同端口数）<input type="number" name="port_scan_threshold" value="{{.Cfg.port_scan_threshold}}"></label>
+    <label>连接频率阈值<input type="number" name="conn_rate_threshold" value="{{.Cfg.conn_rate_threshold}}"></label>
+    <label>UDP Flood 阈值<input type="number" name="udp_flood_threshold" value="{{.Cfg.udp_flood_threshold}}"></label>
+    <label>同一 IP 告警冷却（秒）<input type="number" name="alert_cooldown_seconds" value="{{.Cfg.alert_cooldown_seconds}}"></label>
+    <label>日志保留天数<input type="number" name="event_retention_days" value="{{.Cfg.event_retention_days}}"></label>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>管理界面</h2>
+  <div class="form-grid">
+    <label>用户名<input name="web_username" value="{{.Cfg.web_username}}"></label>
+    <label>新密码<input type="password" name="web_password" placeholder="留空表示不修改"></label>
+    <label>会话时长（小时）<input type="number" name="web_session_hours" value="{{.Cfg.web_session_hours}}"></label>
+  </div>
+</section>
+
+<div class="form-actions"><button type="submit" class="primary">保存配置</button></div>
+</form>
+{{end}}
+{{template "footer" .}}{{end}}

@@ -1,0 +1,36 @@
+services:
+  port-guard:
+    image: port-guard:latest
+    build:
+      context: .
+      args:
+        VERSION: v1.0.0
+    container_name: port-guard
+    restart: unless-stopped
+
+    # 模式 A（默认，桥接网络）：Syslog + 爱快 API 轮询检测
+    # ports:
+    #   - "8080:8080"      # Web 管理界面
+    #   - "5140:5140/udp"  # 接收爱快 Syslog
+
+    # 模式 B（抓包增强，host 网络）：可看到所有经过爱快的流量，检测最精准
+    # 注意：host 模式下 Web 端口直接占用爱快的 8080，请确认未被占用
+    network_mode: host
+
+    # AF_PACKET 抓包需要 NET_RAW 能力；爱快 Docker 一般已具备
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+
+    environment:
+      TZ: Asia/Shanghai
+      # 首次启动可通过环境变量初始化，后续以 Web 界面配置为准
+      # PG_IKUAI_HOST: 192.168.1.1
+      # PG_IKUAI_USERNAME: admin
+      # PG_IKUAI_PASSWORD: your-password
+      # PG_WEB_USERNAME: admin
+      # PG_BAN_MINUTES: "30"
+
+    volumes:
+      - ./data:/data
+    command: ["--listen", ":8080", "--data", "/data", "--log-level", "info"]

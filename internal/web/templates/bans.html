@@ -1,0 +1,61 @@
+{{define "bans.html"}}{{template "header" .}}
+{{with .}}
+<div class="page-head">
+  <h1>封禁管理</h1>
+  <button class="primary small" onclick="showBanModal()">+ 手工封禁 IP</button>
+</div>
+<section class="panel">
+{{if .Bans}}
+<table class="table">
+  <thead><tr><th>源 IP</th><th>原因</th><th>封禁时间</th><th>时长</th><th>到期时间</th><th>剩余</th><th>状态</th><th>操作</th></tr></thead>
+  <tbody>
+  {{range .Bans}}
+    <tr>
+      <td class="mono">{{.IP}}</td>
+      <td>{{.Reason}}</td>
+      <td class="nowrap">{{formatTime .CreatedAt}}</td>
+      <td>{{.Duration}} 分钟</td>
+      <td class="nowrap">{{formatTime .ExpiresAt}}</td>
+      <td>{{countdown .ExpiresAt}}</td>
+      <td><span class="badge {{if .Active}}green{{else}}gray{{end}}">{{if .Active}}生效中{{else}}已解除{{end}}</span></td>
+      <td><button class="btn small" onclick="unbanIP('{{.IP}}')">解封</button></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="empty">暂无封禁记录。</p>{{end}}
+</section>
+
+<div id="banModal" class="modal" style="display:none">
+  <div class="modal-card">
+    <h2>手工封禁 IP</h2>
+    <label>源 IP<input id="banIP" placeholder="1.2.3.4"></label>
+    <label>封禁时长（分钟，留空用默认值）<input id="banMinutes" type="number" placeholder="30"></label>
+    <label>原因<input id="banReason" placeholder="手工封禁"></label>
+    <div class="modal-actions">
+      <button class="btn" onclick="hideBanModal()">取消</button>
+      <button class="primary" onclick="submitBan()">确认封禁</button>
+    </div>
+    <p id="banResult" class="hint"></p>
+  </div>
+</div>
+
+<script>
+function showBanModal(){document.getElementById('banModal').style.display='flex'}
+function hideBanModal(){document.getElementById('banModal').style.display='none'}
+async function submitBan(){
+  const ip=document.getElementById('banIP').value.trim();
+  const minutes=parseInt(document.getElementById('banMinutes').value)||0;
+  const reason=document.getElementById('banReason').value.trim()||'手工封禁';
+  const res=await fetch('/api/ban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip,minutes,reason})});
+  const data=await res.json();
+  if(res.ok){location.reload()}else{document.getElementById('banResult').textContent=data.error||'封禁失败'}
+}
+async function unbanIP(ip){
+  if(!confirm('确认解封 '+ip+' ?'))return;
+  const res=await fetch('/api/unban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip})});
+  if(res.ok){location.reload()}else{alert('解封失败')}
+}
+</script>
+{{end}}
+{{template "footer" .}}{{end}}

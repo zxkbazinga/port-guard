@@ -1,0 +1,21 @@
+# 二进制与构建产物
+bin/
+*.exe
+/port-guard
+
+# 运行时数据
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Go 工作区
+go.work
+go.work.sum
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.log
