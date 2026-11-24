@@ -38,11 +38,14 @@
     <h2>转发日志</h2>
     <div class="section-actions">
       <label class="check"><input type="checkbox" id="fwdLogPause"> 暂停刷新</label>
+      <label class="check">框高 <input type="number" id="fwdLogHeight" min="160" max="900" step="20" value="380" style="width:72px"> px</label>
+      <button class="btn small" onclick="copyFwdLogs()">复制全部日志</button>
       <button class="btn small" onclick="clearFwdLogs()">清空日志</button>
       <span id="fwdLogCount" class="save-feedback">0 条</span>
+      <span id="fwdCopyResult" class="save-feedback"></span>
     </div>
   </div>
-  <p class="desc">保留最近 <strong>1000</strong> 条转发记录（内存日志，重启后清空），每 3 秒自动刷新，最新的在最上面。可据此确认公网访问是否到达代理、被判为哪种动作。</p>
+  <p class="desc">保留最近 <strong>1000</strong> 条转发记录（内存日志，重启后清空），每 3 秒自动刷新，最新的在最上面。日志框带滚动条，可拖拽右下角调整高度，或用上方「框高」输入精确控制；「复制全部日志」会把全部记录复制到剪贴板。</p>
   <div id="fwdLogBox" class="log-box">
     <table class="table log-table">
       <thead><tr><th>时间</th><th>来源 IP</th><th>监听</th><th>后端</th><th>动作</th><th>耗时</th></tr></thead>

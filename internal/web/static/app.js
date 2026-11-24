@@ -26,6 +26,23 @@
   function setupProxyLogs() {
     var body = document.getElementById('fwdLogBody');
     if (!body) return;
+    var box = document.getElementById('fwdLogBox');
+    var heightInput = document.getElementById('fwdLogHeight');
+    if (box && heightInput) {
+      var saved = Number(localStorage.getItem('pgLogHeight'));
+      var h = Number.isFinite(saved) && saved >= 160 && saved <= 900 ? saved : 380;
+      heightInput.value = h;
+      box.style.height = h + 'px';
+      heightInput.addEventListener('change', function () {
+        var n = Number(heightInput.value);
+        if (!Number.isFinite(n) || n < 160 || n > 900) {
+          n = 380;
+        }
+        heightInput.value = n;
+        box.style.height = n + 'px';
+        localStorage.setItem('pgLogHeight', String(n));
+      });
+    }
     var pause = document.getElementById('fwdLogPause');
     var paused = false;
     if (pause) {
@@ -61,6 +78,47 @@
     refresh();
     setInterval(refresh, 3000);
   }
+
+  window.copyFwdLogs = async function () {
+    const result = document.getElementById('fwdCopyResult');
+    try {
+      const res = await fetch('/api/forwards/logs?limit=1000', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const rows = Array.isArray(data.records) ? data.records : [];
+      const lines = ['时间\t来源IP\t监听\t后端\t动作\t耗时'];
+      rows.forEach(function (r) {
+        lines.push([r.time, r.ip, r.listen, r.backend, r.action, r.duration]
+          .map(function (v) { return v == null ? '' : String(v); }).join('\t'));
+      });
+      const text = lines.join('\n');
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // HTTP 页面或非安全上下文下 Clipboard API 不可用，退回 textarea 方案
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('浏览器拒绝复制');
+      }
+      if (result) {
+        result.className = 'save-feedback ok';
+        result.textContent = '✓ 已复制 ' + rows.length + ' 条';
+        setTimeout(function () { result.textContent = ''; }, 3000);
+      }
+    } catch (e) {
+      if (result) {
+        result.className = 'save-feedback err';
+        result.textContent = '复制失败：' + String(e);
+        setTimeout(function () { result.textContent = ''; }, 4000);
+      }
+    }
+  };
 
   function setupSectionSaves() {
     document.querySelectorAll('.section-save').forEach(function (btn) {

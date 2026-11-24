@@ -78,8 +78,10 @@ func TestTemplatesRender(t *testing.T) {
 	if !strings.Contains(buf.String(), "转发规则") {
 		t.Fatal("代理页缺少转发规则区块")
 	}
-	if !strings.Contains(buf.String(), "转发日志") || !strings.Contains(buf.String(), "清空日志") {
-		t.Fatal("代理页缺少转发日志框或清空按钮")
+	for _, want := range []string{"转发日志", "清空日志", "复制全部日志", "fwdLogHeight"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("代理页缺少 %q", want)
+		}
 	}
 	if strings.Contains(buf.String(), "从爱快映射导入") {
 		t.Fatal("代理页仍包含已删的爱快导入按钮")
