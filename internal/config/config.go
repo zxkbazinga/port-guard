@@ -159,11 +159,19 @@ func get(raw json.RawMessage, out any) {
 	_ = json.Unmarshal(raw, out)
 }
 
+// applyEnv 用环境变量覆盖配置。
+// 这是爱快原生应用（ipkg）的主要配置通道：option.json 的字段由爱快写入
+// app/environment，start.sh 读取后 export 成 PG_* 变量传给本程序。
 func (c *Config) applyEnv() {
 	envStr := map[string]*string{
-		"PG_IKUAI_HOST": &c.c.IKuaiHost, "PG_IKUAI_USERNAME": &c.c.IKuaiUsername,
-		"PG_IKUAI_PASSWORD": &c.c.IKuaiPassword, "PG_WEB_USERNAME": &c.c.WebUsername,
-		"PG_BAN_MODE": &c.c.BanMode,
+		"PG_IKUAI_HOST":     &c.c.IKuaiHost,
+		"PG_IKUAI_USERNAME": &c.c.IKuaiUsername,
+		"PG_IKUAI_PASSWORD": &c.c.IKuaiPassword,
+		"PG_WEB_USERNAME":   &c.c.WebUsername,
+		"PG_BAN_MODE":       &c.c.BanMode,
+		"PG_WHITELIST":      &c.c.Whitelist,
+		"PG_SNIFFER_IFACE":  &c.c.SnifferIface,
+		"PG_CONN_FUNC_NAME": &c.c.ConnFuncName,
 	}
 	for k, p := range envStr {
 		if v := os.Getenv(k); v != "" {
@@ -171,7 +179,20 @@ func (c *Config) applyEnv() {
 		}
 	}
 	envInt := map[string]*int{
-		"PG_IKUAI_PORT": &c.c.IKuaiPort, "PG_BAN_MINUTES": &c.c.BanDurationMinutes,
+		"PG_IKUAI_PORT":            &c.c.IKuaiPort,
+		"PG_IKUAI_TIMEOUT":         &c.c.IKuaiTimeout,
+		"PG_BAN_MINUTES":           &c.c.BanDurationMinutes,
+		"PG_SYSLOG_PORT":           &c.c.SyslogPort,
+		"PG_CONN_POLL_INTERVAL":    &c.c.ConnPollInterval,
+		"PG_PORT_REFRESH_INTERVAL": &c.c.PortRefreshInt,
+		"PG_WINDOW_SECONDS":        &c.c.WindowSeconds,
+		"PG_SYN_FLOOD_THRESHOLD":   &c.c.SynFloodThreshold,
+		"PG_PORT_SCAN_THRESHOLD":   &c.c.PortScanThreshold,
+		"PG_CONN_RATE_THRESHOLD":   &c.c.ConnRateThreshold,
+		"PG_UDP_FLOOD_THRESHOLD":   &c.c.UDPFloodThreshold,
+		"PG_ALERT_COOLDOWN":        &c.c.AlertCooldown,
+		"PG_EVENT_RETENTION_DAYS":  &c.c.EventRetentionDays,
+		"PG_WEB_SESSION_HOURS":     &c.c.WebSessionHours,
 	}
 	for k, p := range envInt {
 		if v := os.Getenv(k); v != "" {
@@ -180,11 +201,19 @@ func (c *Config) applyEnv() {
 			}
 		}
 	}
-	if v := os.Getenv("PG_IKUAI_SSL"); v != "" {
-		c.c.IKuaiSSL = strings.EqualFold(v, "true") || v == "1"
+	envBool := map[string]*bool{
+		"PG_IKUAI_SSL":            &c.c.IKuaiSSL,
+		"PG_IGNORE_PRIVATE_IPS":   &c.c.IgnorePrivateIPs,
+		"PG_DETECTION_ENABLED":    &c.c.DetectionEnabled,
+		"PG_SNIFFER_ENABLED":      &c.c.SnifferEnabled,
+		"PG_SYSLOG_ENABLED":       &c.c.SyslogEnabled,
+		"PG_CONN_POLL_ENABLED":    &c.c.ConnPollEnabled,
+		"PG_PORT_REFRESH_ENABLED": &c.c.PortRefresh,
 	}
-	if v := os.Getenv("PG_SNIFFER_IFACE"); v != "" {
-		c.c.SnifferIface = v
+	for k, p := range envBool {
+		if v := os.Getenv(k); v != "" {
+			*p = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+		}
 	}
 }
 

@@ -4,8 +4,9 @@ FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG VERSION=dev
+ARG GOPROXY=https://proxy.golang.org,direct
 
-ENV GOPROXY=https://goproxy.cn,direct CGO_ENABLED=0
+ENV GOPROXY=${GOPROXY} CGO_ENABLED=0
 
 WORKDIR /src
 COPY go.mod go.sum ./
