@@ -46,10 +46,16 @@ jobs:
 
       - name: 校验 ipkg 包配置
         run: |
-          sh -n ikuai-support/port-guard/scripts/*.sh scripts/build-ipkg.sh
+          sh -n scripts/build-ipkg.sh
+          test -f ikuai-support/port-guard/app/docker-compose.yaml
           python3 -c "
           import json
-          json.load(open('ikuai-support/port-guard/manifest.json'))
+          m = json.load(open('ikuai-support/port-guard/manifest.json'))
+          assert m['type'] == '1', 'manifest type 必须为 Docker 应用 1'
+          assert m.get('image', '').startswith('ghcr.io/'), '缺少 GHCR image 字段'
           opts = json.load(open('ikuai-support/port-guard/app/option.json'))
-          print(f'option.json 校验通过，共 {len(opts)} 项配置')
+          assert all(o['scope'] in ('config', 'environment') for o in opts)
+          assert all(o['type'] in ('string', 'integer') for o in opts)
+          print(f'Docker 应用配置校验通过，共 {len(opts)} 项配置')
           "
+          grep -q 'image: ghcr.io/zxkbazinga/port-guard:' ikuai-support/port-guard/app/docker-compose.yaml
