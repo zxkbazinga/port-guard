@@ -2,7 +2,7 @@
 
 > 部署在爱快（iKuai）路由器上的端口映射防护工具。监听被映射到外网的端口，识别扫描 / 爆破 / Flood 行为，自动调用爱快 API 封禁源 IP，到期自动解封。封禁时长、阈值、白名单全部可配置（默认封禁 **30 分钟**）。
 >
-> 提供两种部署方式：**爱快应用市场原生应用（.ipkg）** 与 **Docker 镜像（GHCR）**，均由 GitHub Actions 自动构建发布，无需本地编译。
+> 提供两种部署方式：**爱快应用市场 Docker 应用（.ipkg）** 与 **Docker 镜像（GHCR）**，均由 GitHub Actions 自动构建发布，无需本地编译。
 
 ## 为什么需要它
 
@@ -41,13 +41,15 @@
 
 两种部署方式任选其一，都从 [GitHub Releases](https://github.com/zxkbazinga/port-guard/releases) 获取成品，无需本地构建。
 
-### 方式 A：爱快应用市场（.ipkg，推荐）
+### 方式 A：爱快应用市场 Docker 应用（.ipkg，推荐）
 
-爱快 v4.x → **扩展服务 → 应用市场 → 本地安装**，上传 Release 中的 `port-guard-<版本>-ikuai.ipkg`。
+前提：爱快已安装并启用 **Docker 插件**。然后进入 **扩展服务 → 应用市场 → 本地安装**，上传 Release 中的 `port-guard-<版本>-ikuai.ipkg`。
 
-安装后在应用配置页填写爱快管理地址（本机装填 `127.0.0.1`）、管理端口、API 账号密码，封禁时长默认 30 分钟可直接改。保存后应用自动重启，点击应用详情页的「打开」即可进入 Web 管理界面（默认端口 8080）。
+ipkg 是 Docker 类型应用（`manifest.json` 中 `type: "1"`），安装后会自动从 `ghcr.io/zxkbazinga/port-guard:<版本>` 拉取镜像并创建容器。容器使用 `network_mode: host`，因此抓包（AF_PACKET）和 Syslog 接收能力完整。
 
-> 原生应用直接跑在路由器上，无需 Docker，抓包能力完整（NET_RAW），资源占用最小（约 15MB 二进制）。
+安装后在应用配置页填写爱快管理地址（本机装填 `127.0.0.1`）、管理端口、API 账号密码，封禁时长默认 30 分钟可直接改。保存后应用自动重启，点击应用详情页的「打开」即可进入 Web 管理界面（默认端口 8080，可在 `APP_PORT_WEB` 修改）。
+
+> 如果你的固件不提供本地安装入口，直接用「方式 B」的 Docker Compose 部署，功能完全一致。
 
 ### 方式 B：Docker 镜像（GHCR）
 
@@ -127,7 +129,7 @@ GET    /health              健康检查
 - **SQLite**：`modernc.org/sqlite`（纯 Go 驱动）
 - **抓包**：`golang.org/x/sys/unix` AF_PACKET + `gopacket` 解码，不依赖 libpcap
 - **Web**：标准库 `net/http` + `html/template`，模板与静态资源 `embed` 进二进制
-- 静态二进制约 15MB，ipkg 包约 12MB（含双架构），Docker 镜像约 39MB，运行内存 15–30MB
+- 静态二进制约 15MB，ipkg 包仅数 KB（只含 compose 与配置，镜像从 GHCR 拉取），Docker 镜像约 39MB，运行内存 15–30MB
 - 支持 `linux/amd64` 与 `linux/arm64`
 
 ## 自动构建与发布（GitHub Actions）
@@ -149,7 +151,7 @@ git push origin v1.0.0
 推送后自动完成：
 
 1. 构建并推送 Docker 镜像到 `ghcr.io/zxkbazinga/port-guard:1.0.0`（同时更新 `latest`），支持 amd64 / arm64
-2. 打包爱快原生应用 `port-guard-1.0.0-ikuai.ipkg`
+2. 打包爱快应用市场 Docker 应用 `port-guard-1.0.0-ikuai.ipkg`（引用上面的 GHCR 镜像）
 3. 编译 `port-guard-linux-amd64` / `port-guard-linux-arm64` 独立二进制
 4. 创建 GitHub Release，把以上文件作为附件上传
 

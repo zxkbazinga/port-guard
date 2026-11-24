@@ -1,0 +1,32 @@
+services:
+  port-guard:
+    image: ghcr.io/zxkbazinga/port-guard:1.0.0
+    container_name: port-guard-${NAME_NONCE}
+    deploy:
+      resources:
+        limits:
+          cpus: ${CPUS_LIMIT}
+          memory: ${MEMORY_LIMIT}
+    restart: ${RESTART}
+
+    # host 网络：让 AF_PACKET 抓包看到所有经爱快转发的流量，Syslog 也直接监听宿主 5140 端口
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+
+    volumes:
+      - ./data:/data
+    env_file:
+      - ./environment
+
+    # APP_PORT_WEB 由爱快应用配置页注入
+    command: ["--listen", ":${APP_PORT_WEB}", "--data", "/data", "--log-level", "info"]
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      createdBy: "Port Guard"

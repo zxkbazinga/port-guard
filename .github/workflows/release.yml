@@ -15,7 +15,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------
-  # 1. 构建 GitHub Release 附件：ipkg 原生应用包 + 独立二进制
+  # 1. 构建 GitHub Release 附件：爱快 Docker 应用 ipkg + 独立二进制
   # ---------------------------------------------------------------
   release-assets:
     name: 构建 ipkg 与二进制
@@ -143,9 +143,9 @@ jobs:
           \`\`\`
           支持 linux/amd64 与 linux/arm64。
 
-          ### 爱快应用市场（原生应用）
-          下载 \`port-guard-${VERSION}-ikuai.ipkg\`，在爱快「扩展服务 → 应用市场 → 本地安装」上传即可。
-          安装后请在应用配置页填写爱快管理地址、API 账号密码等信息。
+          ### 爱快应用市场（Docker 应用）
+          前提：已安装并启用爱快 Docker 插件。下载 \`port-guard-${VERSION}-ikuai.ipkg\`，在爱快「扩展服务 → 应用市场 → 本地安装」上传即可。
+          安装后会自动从 ghcr.io 拉取镜像并创建容器；请在应用配置页填写爱快管理地址、API 账号密码等信息。
 
           ### 独立二进制（可自行部署到 Linux 主机）
           - \`port-guard-linux-amd64\`
@@ -163,3 +163,4 @@ jobs:
             dist/port-guard-linux-amd64
             dist/port-guard-linux-arm64
           generate_release_notes: true
+          overwrite_files: true

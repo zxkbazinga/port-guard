@@ -13,17 +13,26 @@
     "max": 65535
   },
   {
+    "attrname": "TZ",
+    "label": {
+      "en": "Timezone",
+      "zh": "时区"
+    },
+    "type": "string",
+    "scope": "environment",
+    "required": true,
+    "default": "Asia/Shanghai"
+  },
+  {
     "attrname": "PG_IKUAI_HOST",
     "label": {
       "en": "iKuai host",
       "zh": "爱快管理地址"
     },
-    "type": "text",
-    "scope": "config",
+    "type": "string",
+    "scope": "environment",
     "required": true,
-    "default": "127.0.0.1",
-    "min": 1,
-    "max": 128
+    "default": "127.0.0.1"
   },
   {
     "attrname": "PG_IKUAI_PORT",
@@ -32,7 +41,7 @@
       "zh": "爱快管理端口"
     },
     "type": "integer",
-    "scope": "config",
+    "scope": "environment",
     "required": true,
     "default": 80,
     "min": 1,
@@ -41,37 +50,44 @@
   {
     "attrname": "PG_IKUAI_USERNAME",
     "label": {
-      "en": "iKuai username",
+      "en": "iKuai API username",
       "zh": "爱快 API 用户名"
     },
-    "type": "text",
-    "scope": "config",
+    "type": "string",
+    "scope": "environment",
     "required": true,
-    "default": "admin",
-    "min": 1,
-    "max": 64
+    "default": "admin"
   },
   {
     "attrname": "PG_IKUAI_PASSWORD",
     "label": {
-      "en": "iKuai password",
+      "en": "iKuai API password",
       "zh": "爱快 API 密码"
     },
-    "type": "password",
-    "scope": "config",
-    "required": true,
-    "default": "",
-    "min": 0,
-    "max": 128
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": ""
+  },
+  {
+    "attrname": "PG_IKUAI_SSL",
+    "label": {
+      "en": "Use HTTPS for iKuai API (true/false)",
+      "zh": "爱快 API 使用 HTTPS（true/false）"
+    },
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": "false"
   },
   {
     "attrname": "PG_BAN_MINUTES",
     "label": {
-      "en": "Ban duration (minutes, 0=permanent)",
+      "en": "Ban duration in minutes (0=permanent)",
       "zh": "封禁时长（分钟，0=永久）"
     },
     "type": "integer",
-    "scope": "config",
+    "scope": "environment",
     "required": true,
     "default": 30,
     "min": 0,
@@ -83,12 +99,10 @@
       "en": "Ban mode: auto/blacklist/acl/none",
       "zh": "封禁方式：auto/blacklist/acl/none"
     },
-    "type": "text",
-    "scope": "config",
-    "required": true,
-    "default": "auto",
-    "min": 1,
-    "max": 32
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": "auto"
   },
   {
     "attrname": "PG_DETECTION_ENABLED",
@@ -97,8 +111,8 @@
       "zh": "启用攻击检测（1/0）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 1,
     "min": 0,
     "max": 1
@@ -106,12 +120,12 @@
   {
     "attrname": "PG_SNIFFER_ENABLED",
     "label": {
-      "en": "Enable packet capture (1/0)",
+      "en": "Enable AF_PACKET capture (1/0)",
       "zh": "启用抓包检测（1/0）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 1,
     "min": 0,
     "max": 1
@@ -122,12 +136,10 @@
       "en": "Capture interface (any=all)",
       "zh": "抓包网卡（any=全部）"
     },
-    "type": "text",
-    "scope": "config",
-    "required": true,
-    "default": "any",
-    "min": 1,
-    "max": 32
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": "any"
   },
   {
     "attrname": "PG_SYSLOG_ENABLED",
@@ -136,8 +148,8 @@
       "zh": "启用 Syslog 接收（1/0）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 1,
     "min": 0,
     "max": 1
@@ -149,8 +161,8 @@
       "zh": "Syslog 监听端口"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 5140,
     "min": 1024,
     "max": 65535
@@ -162,8 +174,8 @@
       "zh": "轮询爱快连接表（1/0）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 0,
     "min": 0,
     "max": 1
@@ -171,12 +183,12 @@
   {
     "attrname": "PG_PORT_REFRESH_ENABLED",
     "label": {
-      "en": "Auto-sync port mappings (1/0)",
+      "en": "Auto-sync DNAT port mappings (1/0)",
       "zh": "自动同步端口映射（1/0）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 1,
     "min": 0,
     "max": 1
@@ -184,12 +196,12 @@
   {
     "attrname": "PG_WINDOW_SECONDS",
     "label": {
-      "en": "Detection window (seconds)",
+      "en": "Detection window in seconds",
       "zh": "检测统计窗口（秒）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 60,
     "min": 10,
     "max": 3600
@@ -201,8 +213,8 @@
       "zh": "SYN Flood 阈值"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 30,
     "min": 1,
     "max": 100000
@@ -214,8 +226,8 @@
       "zh": "端口扫描阈值（不同端口数）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 8,
     "min": 1,
     "max": 1000
@@ -227,8 +239,8 @@
       "zh": "连接频率阈值"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 60,
     "min": 1,
     "max": 100000
@@ -240,8 +252,8 @@
       "zh": "UDP Flood 阈值"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 80,
     "min": 1,
     "max": 100000
@@ -252,12 +264,10 @@
       "en": "Whitelist CIDRs (comma separated)",
       "zh": "白名单 CIDR（逗号分隔）"
     },
-    "type": "text",
-    "scope": "config",
-    "required": true,
-    "default": "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16",
-    "min": 1,
-    "max": 512
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16"
   },
   {
     "attrname": "PG_WEB_USERNAME",
@@ -265,22 +275,20 @@
       "en": "Web admin username",
       "zh": "管理界面用户名"
     },
-    "type": "text",
-    "scope": "config",
-    "required": true,
-    "default": "admin",
-    "min": 1,
-    "max": 64
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": "admin"
   },
   {
     "attrname": "PG_IGNORE_PRIVATE_IPS",
     "label": {
-      "en": "Ignore private IPs (1/0)",
-      "zh": "忽略私网地址（1/0）"
+      "en": "Ignore private source IPs (1/0)",
+      "zh": "忽略私网来源地址（1/0）"
     },
     "type": "integer",
-    "scope": "config",
-    "required": true,
+    "scope": "environment",
+    "required": false,
     "default": 1,
     "min": 0,
     "max": 1
@@ -288,13 +296,15 @@
   {
     "attrname": "PG_LOGIN_FAIL_ENABLED",
     "label": {
-      "en": "Enable login brute-force protection",
-      "zh": "启用登录爆破防护"
+      "en": "Enable login brute-force protection (1/0)",
+      "zh": "启用登录爆破防护（1/0）"
     },
-    "type": "boolean",
-    "scope": "config",
+    "type": "integer",
+    "scope": "environment",
     "required": false,
-    "default": true
+    "default": 1,
+    "min": 0,
+    "max": 1
   },
   {
     "attrname": "PG_LOGIN_FAIL_THRESHOLD",
@@ -303,7 +313,7 @@
       "zh": "登录失败次数阈值"
     },
     "type": "integer",
-    "scope": "config",
+    "scope": "environment",
     "required": false,
     "default": 3,
     "min": 1,
@@ -312,11 +322,11 @@
   {
     "attrname": "PG_LOGIN_FAIL_WINDOW",
     "label": {
-      "en": "Login failure window (seconds)",
+      "en": "Login failure window in seconds",
       "zh": "登录失败统计窗口（秒）"
     },
     "type": "integer",
-    "scope": "config",
+    "scope": "environment",
     "required": false,
     "default": 300,
     "min": 30,

@@ -2,15 +2,16 @@
   "name": "port-guard",
   "version": "1.0.0",
   "display_name": "Port Guard 端口防护",
-  "description": "监听爱快端口映射的端口，自动识别扫描/爆破/Flood 行为并封禁源 IP。封禁时长可在应用界面配置，默认 30 分钟。",
-  "type": "0",
+  "image": "ghcr.io/zxkbazinga/port-guard:1.0.0",
+  "description": "监听爱快端口映射的端口，自动识别扫描/爆破/Flood 行为并调用爱快 API 封禁源 IP。封禁时长可在应用界面配置，默认 30 分钟。",
+  "type": "1",
   "maintainer": "zxkbazinga",
   "maintainer_url": "https://github.com/zxkbazinga/port-guard",
   "distributor": "zxkbazinga",
   "distributor_url": "https://github.com/zxkbazinga/port-guard",
   "requirements": {
-    "memory": "64MB",
-    "storage": "32MB",
-    "os_min_version": "4.0.0"
+    "memory": "128MB",
+    "storage": "64MB",
+    "os_min_version": "3.7.0"
   }
 }
