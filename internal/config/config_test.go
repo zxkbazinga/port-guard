@@ -48,6 +48,45 @@ func TestEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestSavedConfigWinsOverEnv 验证 Web 保存的配置在容器重启后不会被
+// ipkg environment 里的默认值（如 PG_IKUAI_HOST=127.0.0.1）覆盖。
+func TestSavedConfigWinsOverEnv(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	// 模拟用户在 Web 配置页保存过的值
+	first, err := New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Update(map[string]any{
+		"ikuai_host": "192.168.31.253", "ikuai_port": 443, "ikuai_ssl": true,
+		"ikuai_username": "zzbazinga",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟容器重启：environment 仍带旧默认值
+	t.Setenv("PG_IKUAI_HOST", "127.0.0.1")
+	t.Setenv("PG_IKUAI_PORT", "80")
+	t.Setenv("PG_IKUAI_SSL", "false")
+	t.Setenv("PG_IKUAI_USERNAME", "admin")
+	second, err := New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := second.IKuaiBaseURL(); got != "https://192.168.31.253:443" {
+		t.Errorf("已保存的 host/port/ssl 应优先于环境变量，got %s", got)
+	}
+	user, _, _ := second.IKuaiCreds()
+	if user != "zzbazinga" {
+		t.Errorf("已保存的用户名应优先于环境变量，got %s", user)
+	}
+}
+
 func TestIsProtected(t *testing.T) {
 	cfg := newTestConfig(t)
 	cases := []struct {

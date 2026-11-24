@@ -46,11 +46,11 @@
 
 前提：爱快已安装并启用 **Docker 插件**。然后进入 **扩展服务 → 应用市场 → 本地安装**，上传 Release 中的 `port-guard-<版本>-ikuai.ipkg`。
 
-ipkg 是 Docker 类型应用（`manifest.json` 中 `type: "1"`），安装后会自动从 `ghcr.io/zxkbazinga/port-guard:<版本>` 拉取镜像并创建容器。爱快 Docker 插件**禁止使用宿主网络**，因此容器用标准 bridge 网络 + 端口映射：Web 管理端口（默认 8080）和 Syslog 接收端口（UDP 5140）都可在应用配置页修改。
+ipkg 是 Docker 类型应用（`manifest.json` 中 `type: "1"`），安装后会自动从 `ghcr.io/zxkbazinga/port-guard:<版本>` 拉取镜像并创建容器。爱快 Docker 插件**禁止使用宿主网络**，因此容器用标准 bridge 网络 + 端口映射：Web 管理端口（默认 5657）和 Syslog 接收端口（UDP 5140）都可在应用配置页修改。
 
 > **重要**：bridge 网络下 AF_PACKET 抓包看不到经爱快转发的外部流量，所以应用市场部署下抓包已默认关闭，检测主力是**连接表轮询 + Syslog**（登录爆破防护照常工作）。这是爱快平台的硬性限制，不是功能缺失。
 
-安装后在应用配置页填写爱快管理地址、管理端口、API 账号密码，封禁时长默认 30 分钟可直接改。保存后应用自动重启，点击应用详情页的「打开」即可进入 Web 管理界面（默认端口 8080，可在 `APP_PORT_WEB` 修改）。请确保「轮询爱快连接表」保持开启（`PG_CONN_POLL_ENABLED=1`，默认已开）。
+安装后在应用配置页填写爱快管理地址、管理端口、API 账号密码，封禁时长默认 30 分钟可直接改。保存后应用自动重启，点击应用详情页的「打开」即可进入 Web 管理界面（默认端口 5657，可在 `APP_PORT_WEB` 修改）。请确保「轮询爱快连接表」保持开启（`PG_CONN_POLL_ENABLED=1`，默认已开）。
 
 > **管理地址填什么**：容器跑在 bridge 网络里，`127.0.0.1` 指向容器自己，**不要填**。请填爱快的 LAN 地址（如 `192.168.31.1`）。如果填了 LAN 地址仍连不上，可试 Docker 网桥网关地址——也就是你浏览器访问本界面用的那个 IP（如 `172.18.20.1`），它同样指向爱快本机。HTTPS 自签证书已自动跳过校验，按你的爱快实际协议勾选即可。
 
@@ -63,7 +63,7 @@ docker pull ghcr.io/zxkbazinga/port-guard:latest
 docker compose up -d
 ```
 
-默认用 `ports` 端口映射（爱快 Docker 插件禁止宿主网络），Web 界面监听 **8080**、Syslog 监听 UDP **5140**：`http://<爱快LAN-IP>:8080`
+默认用 `ports` 端口映射（爱快 Docker 插件禁止宿主网络），Web 界面监听 **5657**、Syslog 监听 UDP **5140**：`http://<爱快LAN-IP>:5657`
 
 > 这种方式下抓包不可用，但连接表轮询 + Syslog 仍可正常工作。若你在普通 Linux 主机上自建、且确实需要抓包，可自行把 `docker-compose.yml` 改为宿主网络并开启 `PG_SNIFFER_ENABLED=1`。
 
@@ -81,7 +81,11 @@ docker compose up -d
 
 **(c) 确认端口映射**
 
-「系统配置」开启「自动同步端口映射」后，程序会每 5 分钟通过爱快 API 拉取 DNAT 规则，自动识别需要监控的端口。也可以在「端口管理」页面查看全部监控端口，并手工添加或删除端口（手工条目不会被自动同步覆盖）。
+在「系统配置 → 爱快路由器连接」填好管理地址（bridge 模式填爱快 LAN IP，如 `192.168.31.253`）、端口、账号密码，点「测试连接」。**测试成功后会自动保存这套参数并立即同步端口映射**，无须再点底部的「保存配置」。测试失败会分四步显示原因（参数 / TCP / 登录 / 端口映射）。
+
+「系统配置」开启「自动同步端口映射」后，程序会每 5 分钟通过爱快 API 拉取 DNAT 规则。也可以在「端口管理」页面点「从爱快同步」立即拉取，或查看全部监控端口、手工添加删除（手工条目不会被自动同步覆盖）。
+
+> 配置持久化：Web 界面保存的值优先于环境变量。ipkg 的 `environment` 中的 `PG_*` 仅作首次启动初始值，容器重启不会覆盖你在 Web 页面保存的配置。
 
 ### 3. 验证封禁功能
 
@@ -107,7 +111,7 @@ docker compose up -d
 | `syslog_enabled` | true | Syslog 接收 |
 | `conn_poll_enabled` | false | 连接表轮询（需固件支持） |
 
-所有配置均可通过 Web 界面修改，无需重启容器。也可以使用环境变量做首次初始化：`PG_IKUAI_HOST`、`PG_IKUAI_USERNAME`、`PG_IKUAI_PASSWORD`、`PG_IKUAI_PORT`、`PG_IKUAI_SSL`、`PG_WEB_USERNAME`、`PG_BAN_MINUTES`、`PG_SNIFFER_IFACE`。
+所有配置均可通过 Web 界面修改，无需重启容器，且会持久化到 SQLite（容器重启不丢）。环境变量仅用于首次初始化：`PG_IKUAI_HOST`、`PG_IKUAI_USERNAME`、`PG_IKUAI_PASSWORD`、`PG_IKUAI_PORT`、`PG_IKUAI_SSL`、`PG_WEB_USERNAME`、`PG_BAN_MINUTES`、`PG_SNIFFER_IFACE`。一旦某项在 Web 保存过，就以保存值为准，环境变量不再覆盖该项。
 
 ## HTTP API
 

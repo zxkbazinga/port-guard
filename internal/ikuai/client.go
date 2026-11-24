@@ -62,6 +62,15 @@ func New(cfg *config.Config, log *slog.Logger) *Client {
 	return &Client{cfg: cfg, log: log, banMode: ""}
 }
 
+// ResetSession 清除缓存的登录会话，使下一次 API 调用用当前配置重新登录。
+// 在爱快地址/账号/密码变更或测试连接成功后调用。
+func (c *Client) ResetSession() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.session = ""
+	c.loggedAt = time.Time{}
+}
+
 func (c *Client) httpClient() *http.Client {
 	timeout := 5
 	_, _, t := c.cfg.IKuaiCreds()
@@ -278,6 +287,9 @@ func num(v any) int {
 }
 
 func str(v any) string {
+	if v == nil {
+		return ""
+	}
 	if s, ok := v.(string); ok {
 		return s
 	}

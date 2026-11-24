@@ -89,7 +89,7 @@ func New(s *store.Store) (*Config, error) {
 	for key, raw := range stored {
 		apply(&c.c, key, raw)
 	}
-	c.applyEnv()
+	c.applyEnv(stored)
 	// 阈值兜底，防止配置错误导致所有流量都被判定为攻击
 	c.normalize()
 	return c, nil
@@ -170,10 +170,41 @@ func get(raw json.RawMessage, out any) {
 	_ = json.Unmarshal(raw, out)
 }
 
-// applyEnv 用环境变量覆盖配置。
-// 这是爱快原生应用（ipkg）的主要配置通道：option.json 的字段由爱快写入
-// app/environment，start.sh 读取后 export 成 PG_* 变量传给本程序。
-func (c *Config) applyEnv() {
+// applyEnv 用环境变量补充配置（爱快 ipkg 的 option.json → environment → PG_* 通道）。
+// 关键：数据库中已显式保存过的键优先，环境变量只作为首次启动的初始值。
+// 否则 ipkg 的 environment 里写死的 PG_IKUAI_HOST=127.0.0.1 等默认值会在每次
+// 容器重启时覆盖用户在 Web 配置页保存的值，表现为「配置切换菜单/重启后就没了」。
+func (c *Config) applyEnv(stored map[string]json.RawMessage) {
+	// envKey 把 PG_* 环境变量映射到配置库键名；已在库中的键跳过环境变量。
+	envKey := map[string]string{
+		"PG_IKUAI_HOST": "ikuai_host", "PG_IKUAI_USERNAME": "ikuai_username",
+		"PG_IKUAI_PASSWORD": "ikuai_password", "PG_WEB_USERNAME": "web_username",
+		"PG_BAN_MODE": "ban_mode", "PG_WHITELIST": "whitelist",
+		"PG_SNIFFER_IFACE": "sniffer_iface", "PG_CONN_FUNC_NAME": "conn_func_name",
+		"PG_IKUAI_PORT": "ikuai_port", "PG_IKUAI_TIMEOUT": "ikuai_timeout",
+		"PG_BAN_MINUTES": "ban_duration_minutes", "PG_SYSLOG_PORT": "syslog_port",
+		"PG_CONN_POLL_INTERVAL": "conn_poll_interval", "PG_PORT_REFRESH_INTERVAL": "port_refresh_interval",
+		"PG_WINDOW_SECONDS": "window_seconds", "PG_SYN_FLOOD_THRESHOLD": "syn_flood_threshold",
+		"PG_PORT_SCAN_THRESHOLD": "port_scan_threshold", "PG_CONN_RATE_THRESHOLD": "conn_rate_threshold",
+		"PG_UDP_FLOOD_THRESHOLD": "udp_flood_threshold", "PG_ALERT_COOLDOWN": "alert_cooldown_seconds",
+		"PG_EVENT_RETENTION_DAYS": "event_retention_days", "PG_WEB_SESSION_HOURS": "web_session_hours",
+		"PG_LOGIN_FAIL_THRESHOLD": "login_fail_threshold", "PG_LOGIN_FAIL_WINDOW": "login_fail_window_seconds",
+		"PG_IKUAI_SSL": "ikuai_ssl", "PG_IGNORE_PRIVATE_IPS": "ignore_private_ips",
+		"PG_DETECTION_ENABLED": "detection_enabled", "PG_SNIFFER_ENABLED": "sniffer_enabled",
+		"PG_SYSLOG_ENABLED": "syslog_enabled", "PG_CONN_POLL_ENABLED": "conn_poll_enabled",
+		"PG_PORT_REFRESH_ENABLED": "port_refresh_enabled", "PG_LOGIN_FAIL_ENABLED": "login_fail_enabled",
+	}
+	use := func(envName string) bool {
+		if v := os.Getenv(envName); v == "" {
+			return false
+		}
+		key, ok := envKey[envName]
+		if !ok {
+			return true
+		}
+		_, saved := stored[key]
+		return !saved // 库里已保存则跳过环境变量
+	}
 	envStr := map[string]*string{
 		"PG_IKUAI_HOST":     &c.c.IKuaiHost,
 		"PG_IKUAI_USERNAME": &c.c.IKuaiUsername,
@@ -185,8 +216,8 @@ func (c *Config) applyEnv() {
 		"PG_CONN_FUNC_NAME": &c.c.ConnFuncName,
 	}
 	for k, p := range envStr {
-		if v := os.Getenv(k); v != "" {
-			*p = v
+		if use(k) {
+			*p = os.Getenv(k)
 		}
 	}
 	envInt := map[string]*int{
@@ -208,8 +239,8 @@ func (c *Config) applyEnv() {
 		"PG_LOGIN_FAIL_WINDOW":     &c.c.LoginFailWindow,
 	}
 	for k, p := range envInt {
-		if v := os.Getenv(k); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
+		if use(k) {
+			if n, err := strconv.Atoi(os.Getenv(k)); err == nil {
 				*p = n
 			}
 		}
@@ -225,7 +256,8 @@ func (c *Config) applyEnv() {
 		"PG_LOGIN_FAIL_ENABLED":   &c.c.LoginFailEnabled,
 	}
 	for k, p := range envBool {
-		if v := os.Getenv(k); v != "" {
+		if use(k) {
+			v := os.Getenv(k)
 			*p = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
 		}
 	}

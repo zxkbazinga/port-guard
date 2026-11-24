@@ -11,7 +11,7 @@ test:
 	go test ./...
 
 run:
-	go run ./cmd/port-guard --listen :8080 --data ./data
+	go run ./cmd/port-guard --listen :5657 --data ./data
 
 # 宿主机架构镜像
 docker-build:

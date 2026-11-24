@@ -2,10 +2,14 @@
 {{with .}}
 <div class="page-head">
   <h1>端口管理</h1>
-  <button class="primary small" onclick="showPortModal()">+ 手工添加端口</button>
+  <div class="head-actions">
+    <button class="btn small" id="sync-ports-btn" onclick="syncPorts()">从爱快同步</button>
+    <button class="primary small" onclick="showPortModal()">+ 手工添加端口</button>
+  </div>
 </div>
 <section class="panel">
-  <p class="desc">只有发往下列端口的流量才参与攻击判定。来源为「爱快同步」的条目由 DNAT 映射自动拉取，下次同步会按爱快当前配置刷新；手工添加的条目长期保留，直到你手动删除。</p>
+  <p class="desc">只有发往下列端口的流量才参与攻击判定。来源为「爱快同步」的条目由 DNAT 映射自动拉取，下次同步会按爱快当前配置刷新；手工添加的条目长期保留，直到你手动删除。若列表为空，请先到「系统配置」测试连接（成功后会自动同步），或点右上角「从爱快同步」。</p>
+  <p id="syncResult" class="hint" hidden></p>
 {{if .Ports}}
 <table class="table">
   <thead><tr><th>外部端口</th><th>内部端口</th><th>内部 IP</th><th>协议</th><th>备注</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>
@@ -49,6 +53,18 @@
 </div>
 
 <script>
+async function syncPorts(){
+  const btn=document.getElementById('sync-ports-btn');
+  const out=document.getElementById('syncResult');
+  btn.disabled=true;btn.textContent='同步中…';out.hidden=false;out.textContent='正在从爱快拉取端口映射…';
+  try{
+    const res=await fetch('/api/ports/sync',{method:'POST'});
+    const data=await res.json();
+    if(res.ok){out.textContent='同步成功，拉取到 '+(data.synced||0)+' 条映射，列表已刷新';setTimeout(function(){location.reload()},600)}
+    else{out.textContent='同步失败：'+(data.error||('HTTP '+res.status))}
+  }catch(e){out.textContent='同步失败：'+String(e)}
+  finally{btn.disabled=false;btn.textContent='从爱快同步'}
+}
 function showPortModal(){document.getElementById('portModal').style.display='flex'}
 function hidePortModal(){document.getElementById('portModal').style.display='none'}
 async function submitPort(){

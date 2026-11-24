@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", ":8080", "Web 管理界面监听地址")
+	listen := flag.String("listen", ":5657", "Web 管理界面监听地址")
 	dataDir := flag.String("data", "/data", "数据目录（SQLite 数据库）")
 	logLevel := flag.String("log-level", "info", "日志级别：debug/info/warn/error")
 	flag.Parse()

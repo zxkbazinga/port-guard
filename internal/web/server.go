@@ -69,13 +69,16 @@ func NewServer(c Components) (*Server, error) {
 			}
 			return d.Round(time.Second).String()
 		},
-		"checked": func(v bool) string {
+		// 返回 template.HTMLAttr：这些片段位于标签的属性位置，
+		// 用普通 string 会被 html/template 当作不安全的属性名过滤成 ZgotmplZ，
+		// 导致 checkbox / 下拉框的勾选状态无法回显。值均为硬编码常量，安全。
+		"checked": func(v bool) template.HTMLAttr {
 			if v {
 				return "checked"
 			}
 			return ""
 		},
-		"selected": func(a, b string) string {
+		"selected": func(a, b string) template.HTMLAttr {
 			if a == b {
 				return "selected"
 			}
@@ -126,6 +129,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/config", s.withAuth(s.apiConfigSet))
 	s.mux.HandleFunc("POST /api/config/test-ikuai", s.withAuth(s.apiConfigTestIKuai))
 	s.mux.HandleFunc("GET /api/ports", s.withAuth(s.apiPorts))
+	s.mux.HandleFunc("POST /api/ports/sync", s.withAuth(s.apiPortSync))
 	s.mux.HandleFunc("POST /api/ports", s.withAuth(s.apiPortAdd))
 	s.mux.HandleFunc("DELETE /api/ports/{id}", s.withAuth(s.apiPortDelete))
 	s.mux.HandleFunc("POST /api/ban", s.withAuth(s.apiBan))
@@ -238,9 +242,11 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	if err := s.cfg.Update(updates); err != nil {
 		s.log.Error("保存配置失败", "err", err)
 	}
-	// 配置变更后重置引擎状态与 API 探测
+	// 配置变更后重置引擎状态与 API 探测，并立即按新配置重登、同步端口映射
 	s.engine.Reset()
 	s.client.ResetProbe()
+	s.client.ResetSession()
+	go s.poller.RefreshPorts()
 	s.render(w, "config.html", map[string]any{
 		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Mode": s.client.Mode(), "Saved": true,
 	})
@@ -314,13 +320,40 @@ func (s *Server) apiConfigSet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": err.Error()})
 		return
 	}
+	if err := normalizeConfigPayload(payload); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
 	if err := s.cfg.Update(payload); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
 	s.engine.Reset()
 	s.client.ResetProbe()
+	s.client.ResetSession()
+	go s.poller.RefreshPorts()
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// normalizeConfigPayload 把 API 里的明文 web_password 转成哈希字段。
+// 模块级保存和原来的全量保存共用 /api/config，密码字段不能原样入库。
+// 留空表示不修改密码，此时不写入任何密码字段。
+func normalizeConfigPayload(payload map[string]any) error {
+	raw, ok := payload["web_password"]
+	delete(payload, "web_password")
+	if !ok {
+		return nil
+	}
+	plain, ok := raw.(string)
+	if !ok || plain == "" {
+		return nil
+	}
+	hash, err := HashPassword(plain)
+	if err != nil {
+		return err
+	}
+	payload["web_password_hash"] = hash
+	return nil
 }
 
 // apiConfigTestIKuai 使用请求中填写的参数测试爱快连接，不保存配置。
@@ -349,6 +382,28 @@ func (s *Server) apiConfigTestIKuai(w http.ResponseWriter, r *http.Request) {
 		Host: strings.TrimSpace(p.Host), Port: p.Port, SSL: p.SSL,
 		Username: strings.TrimSpace(p.Username), Password: p.Password, Timeout: p.Timeout,
 	}, s.log)
+	// 测试成功即把这套参数落库并立即同步端口映射，避免"测试能连、实际没配置"。
+	// 密码为空表示沿用已保存的密码，不覆盖。
+	if result.OK {
+		updates := map[string]any{
+			"ikuai_host": strings.TrimSpace(p.Host), "ikuai_port": p.Port,
+			"ikuai_ssl": p.SSL, "ikuai_username": strings.TrimSpace(p.Username),
+			"ikuai_timeout": p.Timeout,
+		}
+		if p.Password != "" {
+			updates["ikuai_password"] = p.Password
+		}
+		if err := s.cfg.Update(updates); err != nil {
+			s.log.Error("测试连接成功后保存配置失败", "err", err)
+		} else {
+			s.client.ResetSession()
+			s.client.ResetProbe()
+			if n, err := s.poller.RefreshPorts(); err == nil {
+				result.SyncedPorts = n
+			}
+			result.Saved = true
+		}
+	}
 	writeJSON(w, 200, result)
 }
 
@@ -359,6 +414,17 @@ func (s *Server) apiPorts(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, 200, ports)
+}
+
+// apiPortSync 手动触发一次爱快端口映射同步，返回同步到的条数。
+func (s *Server) apiPortSync(w http.ResponseWriter, _ *http.Request) {
+	s.client.ResetSession()
+	n, err := s.poller.RefreshPorts()
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": "同步失败: " + err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "synced": n})
 }
 
 func (s *Server) apiPortAdd(w http.ResponseWriter, r *http.Request) {

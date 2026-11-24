@@ -10,11 +10,11 @@ services:
 
     # 模式 A（默认，桥接网络）：Syslog + 爱快 API 轮询检测
     # ports:
-    #   - "8080:8080"      # Web 管理界面
+    #   - "5657:5657"      # Web 管理界面
     #   - "5140:5140/udp"  # 接收爱快 Syslog
 
     # 模式 B（抓包增强，host 网络）：可看到所有经过爱快的流量，检测最精准
-    # 注意：host 模式下 Web 端口直接占用爱快的 8080，请确认未被占用
+    # 注意：host 模式下 Web 端口直接占用爱快的 5657，请确认未被占用
     network_mode: host
 
     # AF_PACKET 抓包需要 NET_RAW 能力；爱快 Docker 一般已具备
@@ -33,4 +33,4 @@ services:
 
     volumes:
       - ./data:/data
-    command: ["--listen", ":8080", "--data", "/data", "--log-level", "info"]
+    command: ["--listen", ":5657", "--data", "/data", "--log-level", "info"]

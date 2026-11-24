@@ -5,7 +5,13 @@
 <form method="post" action="/config" class="config-form">
 
 <section class="panel">
-  <h2>爱快路由器连接</h2>
+  <div class="section-head">
+    <h2>爱快路由器连接</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="爱快路由器连接">保存</button>
+    </div>
+  </div>
   <p class="desc">用于拉取端口映射、连接表，以及下发/解除封禁。建议在爱快中创建专门的管理账号。</p>
   <div class="form-grid">
     <label>管理地址<input name="ikuai_host" value="{{.Cfg.ikuai_host}}" placeholder="192.168.1.1"></label>
@@ -17,13 +23,19 @@
   </div>
   <div class="test-row">
     <button type="button" class="btn" id="ikuai-test-btn">测试连接</button>
-    <span class="hint">用上方填写的参数测试，不会保存配置；密码留空则使用已保存的密码</span>
+    <span class="hint">测试成功会自动保存上方参数并同步端口映射；密码留空则使用已保存的密码</span>
   </div>
   <div id="ikuai-test-result" class="alert" hidden></div>
 </section>
 
 <section class="panel">
-  <h2>封禁策略</h2>
+  <div class="section-head">
+    <h2>封禁策略</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="封禁策略">保存</button>
+    </div>
+  </div>
   <div class="form-grid">
     <label>封禁时长（分钟）<input type="number" name="ban_duration_minutes" value="{{.Cfg.ban_duration_minutes}}" min="1"></label>
     <label>封禁方式
@@ -41,7 +53,13 @@
 </section>
 
 <section class="panel">
-  <h2>检测源</h2>
+  <div class="section-head">
+    <h2>检测源</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="检测源">保存</button>
+    </div>
+  </div>
   <div class="form-grid">
     <label class="check"><input type="checkbox" name="detection_enabled" {{checked .Cfg.detection_enabled}}> 启用攻击检测</label>
     <label class="check"><input type="checkbox" name="sniffer_enabled" {{checked .Cfg.sniffer_enabled}}> 抓包检测（需 host 网络）</label>
@@ -57,7 +75,13 @@
 </section>
 
 <section class="panel">
-  <h2>登录爆破防护</h2>
+  <div class="section-head">
+    <h2>登录爆破防护</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="登录爆破防护">保存</button>
+    </div>
+  </div>
   <p class="desc">接收群晖 / Windows / Ubuntu 转发的登录失败日志，同一 IP 在窗口内失败达到阈值即封禁。需在各服务器配置将安全日志发送到本机的 Syslog 端口。</p>
   <div class="form-grid">
     <label class="check"><input type="checkbox" name="login_fail_enabled" {{checked .Cfg.login_fail_enabled}}> 启用登录爆破检测</label>
@@ -67,7 +91,13 @@
 </section>
 
 <section class="panel">
-  <h2>检测阈值</h2>
+  <div class="section-head">
+    <h2>检测阈值</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="检测阈值">保存</button>
+    </div>
+  </div>
   <p class="desc">统计窗口内超过阈值即判定为攻击并自动封禁。数值越大越保守。</p>
   <div class="form-grid">
     <label>统计窗口（秒）<input type="number" name="window_seconds" value="{{.Cfg.window_seconds}}"></label>
@@ -81,7 +111,13 @@
 </section>
 
 <section class="panel">
-  <h2>管理界面</h2>
+  <div class="section-head">
+    <h2>管理界面</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="管理界面">保存</button>
+    </div>
+  </div>
   <div class="form-grid">
     <label>用户名<input name="web_username" value="{{.Cfg.web_username}}"></label>
     <label>新密码<input type="password" name="web_password" placeholder="留空表示不修改"></label>
@@ -89,7 +125,10 @@
   </div>
 </section>
 
-<div class="form-actions"><button type="submit" class="primary">保存配置</button></div>
+<div class="form-actions">
+  <button type="submit" class="primary">保存全部配置</button>
+  <span class="hint">也可以只保存某个模块：点击对应模块右上角的「保存」</span>
+</div>
 </form>
 {{end}}
 {{template "footer" .}}{{end}}

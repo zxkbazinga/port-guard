@@ -3,7 +3,7 @@
   'use strict';
   var path = window.location.pathname;
   if (path === '/') setupDashboard();
-  if (path === '/config') setupConfigTest();
+  if (path === '/config') { setupConfigTest(); setupSectionSaves(); }
 
   function setupDashboard() {
     setInterval(async function () {
@@ -57,7 +57,11 @@
           showResult(out, false, '请求失败', [{ name: '接口调用', ok: false, message: msg }], '');
           return;
         }
-        showResult(out, data.ok, data.ok ? '连接成功' : '连接失败', data.steps || [], data.base_url || '');
+        var title = data.ok ? '连接成功' : '连接失败';
+        if (data.ok && data.saved) {
+          title = '连接成功，配置已保存' + (data.synced_ports ? '，已同步 ' + data.synced_ports + ' 条端口映射' : '');
+        }
+        showResult(out, data.ok, title, data.steps || [], data.base_url || '');
       } catch (e) {
         showResult(out, false, '请求失败', [{ name: '网络错误', ok: false, message: String(e) }], '');
       } finally {
@@ -65,6 +69,75 @@
         btn.textContent = original;
       }
     });
+  }
+
+  // 配置页：每个模块右上角独立保存，只提交该模块内的字段。
+  function setupSectionSaves() {
+    document.querySelectorAll('.section-save').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        const panel = btn.closest('.panel');
+        const feedback = panel.querySelector('.save-feedback');
+        const label = btn.getAttribute('data-label') || '配置';
+        const payload = collectSection(panel);
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '保存中…';
+        feedback.hidden = true;
+        try {
+          const res = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+          });
+          let data = null;
+          try { data = await res.json(); } catch (e) { /* 非 JSON 响应 */ }
+          if (!res.ok || !data || !data.ok) {
+            const msg = data && data.error ? data.error : ('HTTP ' + res.status);
+            showFeedback(feedback, false, label + '保存失败：' + msg);
+            return;
+          }
+          showFeedback(feedback, true, '✓ 已保存');
+        } catch (e) {
+          showFeedback(feedback, false, label + '保存失败：' + String(e));
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+    });
+  }
+
+  function collectSection(panel) {
+    const payload = {};
+    panel.querySelectorAll('[name]').forEach(function (el) {
+      const name = el.name;
+      if (!name) return;
+      // 密码框留空表示沿用已保存值，不提交；非空交给后端哈希处理
+      if (name === 'ikuai_password' || name === 'web_password') {
+        if (el.value !== '') payload[name] = el.value;
+        return;
+      }
+      if (el.type === 'checkbox') {
+        payload[name] = el.checked; // 取消勾选也要显式提交 false
+      } else if (el.type === 'number') {
+        const n = Number(el.value);
+        payload[name] = Number.isFinite(n) ? n : 0;
+      } else {
+        payload[name] = typeof el.value === 'string' ? el.value.trim() : el.value;
+      }
+    });
+    return payload;
+  }
+
+  function showFeedback(el, ok, message) {
+    el.hidden = false;
+    el.className = 'save-feedback ' + (ok ? 'ok' : 'err');
+    el.textContent = message;
+    clearTimeout(el._hideTimer);
+    if (ok) {
+      el._hideTimer = setTimeout(function () { el.hidden = true; }, 3000);
+    }
   }
 
   function showResult(el, ok, title, steps, baseURL) {

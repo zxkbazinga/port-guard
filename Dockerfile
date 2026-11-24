@@ -22,8 +22,8 @@ RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data
 COPY --from=builder /out/port-guard /usr/local/bin/port-guard
 
 ENV TZ=Asia/Shanghai
-EXPOSE 8080/tcp 5140/udp
+EXPOSE 5657/tcp 5140/udp
 VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/local/bin/port-guard"]
-CMD ["--listen", ":8080", "--data", "/data"]
+CMD ["--listen", ":5657", "--data", "/data"]

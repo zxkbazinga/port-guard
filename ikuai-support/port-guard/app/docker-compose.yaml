@@ -10,14 +10,14 @@ services:
     restart: ${RESTART}
     # 爱快 Docker 插件需用端口映射 + 外部网络，不能用宿主网络
     ports:
-      - ${HOST_IP}:${APP_PORT_WEB}:8080/tcp
+      - ${HOST_IP}:${APP_PORT_WEB}:5657/tcp
       - ${HOST_IP}:${APP_PORT_SYSLOG}:5140/udp
     volumes:
       - ./data:/data
     env_file:
       - ./environment
     # bridge 网络下抓包看不到外部转发流量，检测主力为连接表轮询 + Syslog
-    command: ["--listen", ":8080", "--data", "/data", "--log-level", "info"]
+    command: ["--listen", ":5657", "--data", "/data", "--log-level", "info"]
     logging:
       driver: "json-file"
       options:

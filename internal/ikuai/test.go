@@ -30,10 +30,12 @@ type TestStep struct {
 
 // TestResult 是连接测试的完整结果，按步骤展示便于定位问题。
 type TestResult struct {
-	OK       bool       `json:"ok"`
-	BaseURL  string     `json:"base_url"`
-	Steps    []TestStep `json:"steps"`
-	Mappings int        `json:"mappings"`
+	OK          bool       `json:"ok"`
+	BaseURL     string     `json:"base_url"`
+	Steps       []TestStep `json:"steps"`
+	Mappings    int        `json:"mappings"`
+	Saved       bool       `json:"saved"`        // 成功参数是否已落库
+	SyncedPorts int        `json:"synced_ports"` // 已同步到端口列表的条数
 }
 
 // TestConnection 分四步测试爱快 API：参数检查 → TCP 连通 → 登录 → 读取端口映射。

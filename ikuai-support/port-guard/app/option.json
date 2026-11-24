@@ -8,7 +8,7 @@
     "type": "integer",
     "scope": "config",
     "required": true,
-    "default": 8080,
+    "default": 5657,
     "min": 1024,
     "max": 65535
   },
