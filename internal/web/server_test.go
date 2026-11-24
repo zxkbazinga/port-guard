@@ -71,11 +71,15 @@ func TestTemplatesRender(t *testing.T) {
 		"Title": "转发代理", "Forwards": nil, "PortStart": 22300, "PortEnd": 22349,
 		"Proxy": map[string]any{"running": false, "ports": []int{}, "total": 0,
 			"blocked": 0, "active": 0, "records": nil},
+		"Logs": nil,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "转发规则") {
 		t.Fatal("代理页缺少转发规则区块")
+	}
+	if !strings.Contains(buf.String(), "转发日志") || !strings.Contains(buf.String(), "清空日志") {
+		t.Fatal("代理页缺少转发日志框或清空按钮")
 	}
 	if strings.Contains(buf.String(), "从爱快映射导入") {
 		t.Fatal("代理页仍包含已删的爱快导入按钮")

@@ -17,6 +17,9 @@ import (
 	"github.com/zxkbazinga/port-guard/internal/store"
 )
 
+// maxConnRecords 是内存中保留的转发日志上限。
+const maxConnRecords = 1000
+
 // ConnRecord 是一条最近连接记录。
 type ConnRecord struct {
 	Time     string `json:"time"`
@@ -229,6 +232,9 @@ func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Fo
 		n, err := io.Copy(dst, src)
 		p.bytes.Add(uint64(n))
 		if err != nil {
+			// 任一方向异常时立即关闭两端，避免另一方向的 io.Copy 永久阻塞
+			_ = conn.Close()
+			_ = upstream.Close()
 			return
 		}
 		// 半关闭：让对端读完剩余数据
@@ -253,9 +259,29 @@ func (p *Server) record(start time.Time, ip string, f store.Forward, backend, ac
 		Action:   action,
 		Duration: d.Round(time.Millisecond).String(),
 	}}, p.records...)
-	if len(p.records) > 30 {
-		p.records = p.records[:30]
+	if len(p.records) > maxConnRecords {
+		p.records = p.records[:maxConnRecords]
 	}
+}
+
+// Records 返回最近的转发日志（最新在前）。limit<=0 表示最多返回全部 1000 条。
+func (p *Server) Records(limit int) []ConnRecord {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := len(p.records)
+	if limit > 0 && limit < n {
+		n = limit
+	}
+	out := make([]ConnRecord, n)
+	copy(out, p.records[:n])
+	return out
+}
+
+// ClearRecords 手动清空内存中的转发日志。
+func (p *Server) ClearRecords() {
+	p.mu.Lock()
+	p.records = nil
+	p.mu.Unlock()
 }
 
 func (p *Server) Stop() {
@@ -271,12 +297,13 @@ func (p *Server) Stop() {
 
 // Stats 返回代理运行状态与最近连接。
 func (p *Server) Stats() map[string]any {
+	// 概览页只需要少量记录，完整日志走 /api/forwards/logs
+	records := p.Records(30)
 	p.mu.Lock()
 	ports := make([]int, 0, len(p.listeners))
 	for port := range p.listeners {
 		ports = append(ports, port)
 	}
-	records := append([]ConnRecord(nil), p.records...)
 	p.mu.Unlock()
 	return map[string]any{
 		"running": p.running.Load(),

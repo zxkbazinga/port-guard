@@ -119,6 +119,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/forwards", s.withAuth(s.apiForwardAdd))
 	s.mux.HandleFunc("POST /api/forwards/{id}/toggle", s.withAuth(s.apiForwardToggle))
 	s.mux.HandleFunc("DELETE /api/forwards/{id}", s.withAuth(s.apiForwardDelete))
+	s.mux.HandleFunc("GET /api/forwards/logs", s.withAuth(s.apiForwardLogs))
+	s.mux.HandleFunc("POST /api/forwards/logs/clear", s.withAuth(s.apiForwardLogsClear))
 	s.mux.HandleFunc("POST /api/ban", s.withAuth(s.apiBan))
 	s.mux.HandleFunc("POST /api/unban", s.withAuth(s.apiUnban))
 	s.mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
@@ -242,7 +244,7 @@ func (s *Server) proxyPage(w http.ResponseWriter, _ *http.Request) {
 	portStart, portEnd := s.cfg.ProxyPortRange()
 	s.render(w, "proxy.html", map[string]any{
 		"Title": "转发代理", "Forwards": forwards, "Proxy": s.proxyStats(),
-		"PortStart": portStart, "PortEnd": portEnd,
+		"Logs": s.proxyRecords(1000), "PortStart": portStart, "PortEnd": portEnd,
 	})
 }
 
@@ -251,9 +253,16 @@ func (s *Server) proxyPage(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) proxyStats() map[string]any {
 	if s.proxySrv == nil {
 		return map[string]any{"running": false, "enabled": false, "ports": []int{},
-			"total": 0, "blocked": 0, "active": 0, "bytes": 0, "records": []any{}}
+			"total": 0, "blocked": 0, "active": 0, "bytes": 0, "records": []proxy.ConnRecord{}}
 	}
 	return s.proxySrv.Stats()
+}
+
+func (s *Server) proxyRecords(limit int) []proxy.ConnRecord {
+	if s.proxySrv == nil {
+		return []proxy.ConnRecord{}
+	}
+	return s.proxySrv.Records(limit)
 }
 
 func (s *Server) reloadProxy() {
@@ -413,6 +422,24 @@ func (s *Server) apiForwardDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reloadProxy()
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) apiForwardLogs(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 1000 {
+		limit = 1000
+	}
+	records := s.proxyRecords(limit)
+	writeJSON(w, 200, map[string]any{
+		"max": 1000, "count": len(records), "records": records,
+	})
+}
+
+func (s *Server) apiForwardLogsClear(w http.ResponseWriter, _ *http.Request) {
+	if s.proxySrv != nil {
+		s.proxySrv.ClearRecords()
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

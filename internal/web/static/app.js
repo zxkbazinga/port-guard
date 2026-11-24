@@ -4,6 +4,7 @@
   var path = window.location.pathname;
   if (path === '/') setupDashboard();
   if (path === '/config') setupSectionSaves();
+  if (path === '/proxy') setupProxyLogs();
 
   function setupDashboard() {
     setInterval(async function () {
@@ -20,6 +21,44 @@
         }
       } catch (e) { /* 静默失败，不影响页面 */ }
     }, 15000);
+  }
+
+  function setupProxyLogs() {
+    var body = document.getElementById('fwdLogBody');
+    if (!body) return;
+    var pause = document.getElementById('fwdLogPause');
+    var paused = false;
+    if (pause) {
+      pause.addEventListener('change', function () { paused = pause.checked; });
+    }
+    async function refresh() {
+      if (paused) return;
+      try {
+        const res = await fetch('/api/forwards/logs?limit=1000', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const rows = Array.isArray(data.records) ? data.records : [];
+        if (!body) return;
+        body.replaceChildren();
+        rows.forEach(function (r) {
+          const tr = document.createElement('tr');
+          [r.Time, r.IP, r.Listen, r.Backend, r.Action, r.Duration].forEach(function (v, i) {
+            const td = document.createElement('td');
+            td.textContent = v == null ? '' : String(v);
+            if (i === 0) td.className = 'nowrap';
+            if (i === 1 || i === 2 || i === 3) td.className = 'mono';
+            tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+        const counter = document.getElementById('fwdLogCount');
+        if (counter) {
+          counter.textContent = rows.length + (rows.length >= 1000 ? ' 条（已达上限）' : ' 条');
+        }
+      } catch (e) { /* 静默失败，不影响规则管理 */ }
+    }
+    refresh();
+    setInterval(refresh, 3000);
   }
 
   function setupSectionSaves() {

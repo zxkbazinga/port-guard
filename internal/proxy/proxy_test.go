@@ -139,6 +139,27 @@ func TestLocalBanLifecycle(t *testing.T) {
 	}
 }
 
+func TestRecordCapAndClear(t *testing.T) {
+	cfg, s, eng, log := testSetup(t)
+	p := New(cfg, log, eng, s)
+	backend := "127.0.0.1:22"
+	f := store.Forward{ListenPort: 22300}
+	start := time.Now()
+	for i := 0; i < maxConnRecords+50; i++ {
+		p.record(start, "8.8.8.8", f, backend, "转发", time.Millisecond)
+	}
+	if got := len(p.Records(0)); got != maxConnRecords {
+		t.Fatalf("日志应保留 %d 条，实际 %d", maxConnRecords, got)
+	}
+	if got := len(p.Records(10)); got != 10 {
+		t.Fatalf("limit=10 应返回 10 条，实际 %d", got)
+	}
+	p.ClearRecords()
+	if got := len(p.Records(0)); got != 0 {
+		t.Fatalf("清空后应为 0 条，实际 %d", got)
+	}
+}
+
 func TestDisabledForwardNotListened(t *testing.T) {
 	cfg, s, eng, log := testSetup(t)
 	port := freePort(t)
