@@ -42,7 +42,8 @@
         body.replaceChildren();
         rows.forEach(function (r) {
           const tr = document.createElement('tr');
-          [r.Time, r.IP, r.Listen, r.Backend, r.Action, r.Duration].forEach(function (v, i) {
+          // API 字段是 JSON tag 的小写形式
+          [r.time, r.ip, r.listen, r.backend, r.action, r.duration].forEach(function (v, i) {
             const td = document.createElement('td');
             td.textContent = v == null ? '' : String(v);
             if (i === 0) td.className = 'nowrap';
