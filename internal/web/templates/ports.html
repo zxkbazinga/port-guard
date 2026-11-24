@@ -1,0 +1,76 @@
+{{define "ports.html"}}{{template "header" .}}
+{{with .}}
+<div class="page-head">
+  <h1>端口管理</h1>
+  <button class="primary small" onclick="showPortModal()">+ 手工添加端口</button>
+</div>
+<section class="panel">
+  <p class="desc">只有发往下列端口的流量才参与攻击判定。来源为「爱快同步」的条目由 DNAT 映射自动拉取，下次同步会按爱快当前配置刷新；手工添加的条目长期保留，直到你手动删除。</p>
+{{if .Ports}}
+<table class="table">
+  <thead><tr><th>外部端口</th><th>内部端口</th><th>内部 IP</th><th>协议</th><th>备注</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>
+  <tbody>
+  {{range .Ports}}
+    <tr>
+      <td class="mono">{{.ExternalPort}}</td>
+      <td class="mono">{{.InternalPort}}</td>
+      <td class="mono">{{if .InternalIP}}{{.InternalIP}}{{else}}-{{end}}</td>
+      <td>{{.Protocol}}</td>
+      <td>{{if .Label}}{{.Label}}{{else}}-{{end}}</td>
+      <td><span class="badge {{if eq .Source "manual"}}green{{else}}gray{{end}}">{{if eq .Source "manual"}}手工添加{{else}}爱快同步{{end}}</span></td>
+      <td><span class="badge {{if .Enabled}}green{{else}}gray{{end}}">{{if .Enabled}}监控中{{else}}已停用{{end}}</span></td>
+      <td><button class="btn small" onclick="deletePort({{.ID}})">删除</button></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p class="empty">暂无监控端口。系统启动时会从爱快拉取端口映射，也可以在此手工添加。</p>{{end}}
+</section>
+
+<div id="portModal" class="modal" style="display:none">
+  <div class="modal-card">
+    <h2>手工添加端口</h2>
+    <label>外部端口<input id="portExt" type="number" min="1" max="65535" placeholder="8080"></label>
+    <label>内部端口（留空则同外部端口）<input id="portInt" type="number" min="1" max="65535" placeholder="8080"></label>
+    <label>内部 IP（可选）<input id="portIP" placeholder="192.168.1.10"></label>
+    <label>协议
+      <select id="portProto">
+        <option value="tcp">TCP</option>
+        <option value="udp">UDP</option>
+      </select>
+    </label>
+    <label>备注（可选）<input id="portLabel" placeholder="例如：NAS 管理页面"></label>
+    <div class="modal-actions">
+      <button class="btn" onclick="hidePortModal()">取消</button>
+      <button class="primary" onclick="submitPort()">确认添加</button>
+    </div>
+    <p id="portResult" class="hint"></p>
+  </div>
+</div>
+
+<script>
+function showPortModal(){document.getElementById('portModal').style.display='flex'}
+function hidePortModal(){document.getElementById('portModal').style.display='none'}
+async function submitPort(){
+  const externalPort=parseInt(document.getElementById('portExt').value);
+  const internalPort=parseInt(document.getElementById('portInt').value)||0;
+  const body={
+    external_port:externalPort,
+    internal_port:internalPort,
+    internal_ip:document.getElementById('portIP').value.trim(),
+    protocol:document.getElementById('portProto').value,
+    label:document.getElementById('portLabel').value.trim()
+  };
+  if(!externalPort||externalPort<1||externalPort>65535){document.getElementById('portResult').textContent='请输入有效的外部端口';return}
+  const res=await fetch('/api/ports',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const data=await res.json();
+  if(res.ok){location.reload()}else{document.getElementById('portResult').textContent=data.error||'添加失败'}
+}
+async function deletePort(id){
+  if(!confirm('确认删除该监控端口？'))return;
+  const res=await fetch('/api/ports/'+id,{method:'DELETE'});
+  if(res.ok){location.reload()}else{alert('删除失败')}
+}
+</script>
+{{end}}
+{{template "footer" .}}{{end}}

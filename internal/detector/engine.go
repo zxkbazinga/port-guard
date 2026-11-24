@@ -19,10 +19,11 @@ import (
 type Kind int
 
 const (
-	KindSYN    Kind = iota // TCP SYN（新建连接尝试）
-	KindUDP                // UDP 包
-	KindConn               // 来自爱快连接表的新建连接
-	KindSyslog             // 来自爱快安全日志的告警
+	KindSYN       Kind = iota // TCP SYN（新建连接尝试）
+	KindUDP                   // UDP 包
+	KindConn                  // 来自爱快连接表的新建连接
+	KindSyslog                // 来自爱快安全日志的告警
+	KindLoginFail             // 来自 NAS / Windows / Ubuntu 的登录失败日志
 )
 
 // Observation 是一次观测。
@@ -48,10 +49,11 @@ type Alert struct {
 
 // ipState 保存单个源 IP 的滑动窗口数据。
 type ipState struct {
-	hits      *list.List // []hit{ts, port}
-	ports     map[int]int
-	lastAlert time.Time
-	alertRule string
+	hits       *list.List // []hit{ts, port}
+	ports      map[int]int
+	loginFails *list.List // []time.Time，登录失败独立窗口
+	lastAlert  time.Time
+	alertRule  string
 }
 
 type hit struct {
@@ -101,16 +103,19 @@ func (e *Engine) Feed(o Observation) bool {
 		return false
 	}
 
-	// 端口映射过滤：只有发往映射端口的流量才计入（syslog 事件除外）
-	if o.Kind != KindSyslog && len(e.known) > 0 && !e.known[o.Port] {
+	// 端口映射过滤：只有发往映射端口的流量才计入（日志类事件除外）
+	if o.Kind != KindSyslog && o.Kind != KindLoginFail && len(e.known) > 0 && !e.known[o.Port] {
 		return false
 	}
 
 	e.mu.Lock()
 	state, ok := e.states[o.IP]
 	if !ok {
-		state = &ipState{hits: list.New(), ports: make(map[int]int)}
+		state = &ipState{hits: list.New(), ports: make(map[int]int), loginFails: list.New()}
 		e.states[o.IP] = state
+	}
+	if state.loginFails == nil {
+		state.loginFails = list.New()
 	}
 	state.hits.PushBack(hit{ts: o.TS, port: o.Port, kind: o.Kind})
 	if o.Port > 0 {
@@ -151,7 +156,7 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 	}
 
 	var result *Alert
-	synOnPort, udpCount, connCount := 0, 0, 0
+	synOnPort, udpCount, connCount, loginFails := 0, 0, 0, 0
 	for node := state.hits.Front(); node != nil; node = node.Next() {
 		h := node.Value.(hit)
 		switch h.kind {
@@ -166,6 +171,16 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 		}
 	}
 
+	// 登录失败用独立窗口统计（默认 5 分钟），与 SYN 的 60 秒窗口解耦
+	if th.LoginFailEnabled && o.Kind == KindLoginFail {
+		loginCutoff := now.Add(-time.Duration(th.LoginFailWindow) * time.Second)
+		for front := state.loginFails.Front(); front != nil && front.Value.(time.Time).Before(loginCutoff); front = state.loginFails.Front() {
+			state.loginFails.Remove(front)
+		}
+		state.loginFails.PushBack(o.TS)
+		loginFails = state.loginFails.Len()
+	}
+
 	if o.Kind == KindSyslog {
 		result = &Alert{IP: ip, Port: o.Port, Proto: o.Proto, Rule: "syslog",
 			Reason: "爱快安全日志告警", Detail: o.Detail}
@@ -173,6 +188,10 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 
 	switch {
 	case result != nil:
+	case o.Kind == KindLoginFail && th.LoginFailEnabled && loginFails >= th.LoginFail:
+		result = &Alert{IP: ip, Port: o.Port, Proto: o.Proto, Rule: "login_brute",
+			Reason: "登录爆破行为", Detail: "短时间内多次登录失败",
+			Evidence: "failed=" + strconv.Itoa(loginFails) + "/" + strconv.Itoa(th.LoginFail)}
 	case o.Kind == KindSYN && synOnPort >= th.SynFlood:
 		result = &Alert{IP: ip, Port: o.Port, Proto: "tcp", Rule: "syn_flood",
 			Reason: "SYN Flood 攻击", Detail: "窗口内对同一端口的 SYN 数量异常",
@@ -201,6 +220,9 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 		// 告警后清空窗口，避免同一批流量连续触发
 		state.hits.Init()
 		state.ports = make(map[int]int)
+		if result.Rule == "login_brute" {
+			state.loginFails.Init()
+		}
 	}
 	return result
 }

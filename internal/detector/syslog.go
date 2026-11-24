@@ -65,6 +65,13 @@ var (
 	reSRC       = regexp.MustCompile(`(?i)\b(?:SRC|src_ip|srcip|source|源ip)[=: ]+([0-9]{1,3}(?:\.[0-9]{1,3}){3})`)
 	reDPT       = regexp.MustCompile(`(?i)\b(?:DPT|dst_port|dport|目的端口)[=: ]+(\d+)`)
 	attackWords = []string{"扫描", "攻击", "flood", "syn flood", " udp flood", "阻断", "拦截", "drop", "blocked", "intrusion", "exploit"}
+	// 登录失败关键词，覆盖 Linux sshd、Windows 安全日志、群晖 DSM 及常见应用
+	loginFailWords = []string{
+		"failed password", "invalid user", "authentication failure", "auth failure",
+		"failed login", "login failed", "logon failure", "failed logon",
+		"登录失败", "密码错误", "登陆失败", "账号或密码错误", "无效用户",
+		"4625", "bad password", "incorrect password", "pam_unix(sshd:auth)",
+	}
 )
 
 func (s *SyslogReceiver) parse(line string) {
@@ -72,6 +79,15 @@ func (s *SyslogReceiver) parse(line string) {
 		return
 	}
 	lower := strings.ToLower(line)
+
+	// 优先判断登录失败——这类日志也常被误判为攻击，需走独立通道
+	isLoginFail := false
+	for _, word := range loginFailWords {
+		if strings.Contains(lower, word) {
+			isLoginFail = true
+			break
+		}
+	}
 	isAttack := false
 	for _, word := range attackWords {
 		if strings.Contains(lower, word) {
@@ -79,13 +95,13 @@ func (s *SyslogReceiver) parse(line string) {
 			break
 		}
 	}
-	if !isAttack {
+	if !isAttack && !isLoginFail {
 		return
 	}
 
 	ipMatch := reSRC.FindStringSubmatch(line)
 	if ipMatch == nil {
-		ipMatch = reIPv4.FindStringSubmatch(line)
+		ipMatch = extractLoginIP(line, isLoginFail)
 	}
 	if ipMatch == nil {
 		return
@@ -95,10 +111,36 @@ func (s *SyslogReceiver) parse(line string) {
 	if m := reDPT.FindStringSubmatch(line); m != nil {
 		port, _ = strconv.Atoi(m[1])
 	}
+	kind, proto := KindSyslog, ""
+	reason := ""
+	if isLoginFail {
+		kind, proto, reason = KindLoginFail, "tcp", "登录失败"
+	}
 	s.eng.Feed(Observation{
-		Kind: KindSyslog, IP: ip, Port: port, Proto: "",
-		Detail: truncate(line, 200),
+		Kind: kind, IP: ip, Port: port, Proto: proto,
+		Detail: reason + truncate(line, 200),
 	})
+}
+
+// extractLoginIP 从登录失败日志里提取来源 IP。
+// 不同系统的日志格式差异很大：sshd 写在 "from x.x.x.x"，
+// Windows 事件转发常带 "Source Network Address: x.x.x.x"，需优先匹配这些字段。
+func extractLoginIP(line string, isLoginFail bool) []string {
+	if isLoginFail {
+		for _, re := range loginIPRes {
+			if m := re.FindStringSubmatch(line); m != nil {
+				return []string{"", m[1]}
+			}
+		}
+	}
+	m := reIPv4.FindStringSubmatch(line)
+	return m
+}
+
+var loginIPRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bfrom\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3})`),
+	regexp.MustCompile(`(?i)(?:source network address|source ip|client ip|源ip|登录源)[^\d]{0,12}([0-9]{1,3}(?:\.[0-9]{1,3}){3})`),
+	regexp.MustCompile(`(?i)\b(?:rhost|remote|ip)[=: ]+([0-9]{1,3}(?:\.[0-9]{1,3}){3})`),
 }
 
 func truncate(s string, n int) string {

@@ -55,6 +55,10 @@ type values struct {
 	UDPFloodThreshold  int `json:"udp_flood_threshold"`
 	AlertCooldown      int `json:"alert_cooldown_seconds"`
 	EventRetentionDays int `json:"event_retention_days"`
+	// 登录爆破检测（来自 NAS / Windows / Ubuntu 转发的安全日志）
+	LoginFailEnabled   bool `json:"login_fail_enabled"`
+	LoginFailThreshold int  `json:"login_fail_threshold"`
+	LoginFailWindow    int  `json:"login_fail_window_seconds"`
 }
 
 func defaults() values {
@@ -71,6 +75,7 @@ func defaults() values {
 		WindowSeconds: 60, SynFloodThreshold: 30, PortScanThreshold: 8,
 		ConnRateThreshold: 60, UDPFloodThreshold: 80, AlertCooldown: 300,
 		EventRetentionDays: 30,
+		LoginFailEnabled:   true, LoginFailThreshold: 3, LoginFailWindow: 300,
 	}
 }
 
@@ -152,6 +157,12 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.AlertCooldown)
 	case "event_retention_days":
 		get(raw, &v.EventRetentionDays)
+	case "login_fail_enabled":
+		get(raw, &v.LoginFailEnabled)
+	case "login_fail_threshold":
+		get(raw, &v.LoginFailThreshold)
+	case "login_fail_window_seconds":
+		get(raw, &v.LoginFailWindow)
 	}
 }
 
@@ -193,6 +204,8 @@ func (c *Config) applyEnv() {
 		"PG_ALERT_COOLDOWN":        &c.c.AlertCooldown,
 		"PG_EVENT_RETENTION_DAYS":  &c.c.EventRetentionDays,
 		"PG_WEB_SESSION_HOURS":     &c.c.WebSessionHours,
+		"PG_LOGIN_FAIL_THRESHOLD":  &c.c.LoginFailThreshold,
+		"PG_LOGIN_FAIL_WINDOW":     &c.c.LoginFailWindow,
 	}
 	for k, p := range envInt {
 		if v := os.Getenv(k); v != "" {
@@ -209,6 +222,7 @@ func (c *Config) applyEnv() {
 		"PG_SYSLOG_ENABLED":       &c.c.SyslogEnabled,
 		"PG_CONN_POLL_ENABLED":    &c.c.ConnPollEnabled,
 		"PG_PORT_REFRESH_ENABLED": &c.c.PortRefresh,
+		"PG_LOGIN_FAIL_ENABLED":   &c.c.LoginFailEnabled,
 	}
 	for k, p := range envBool {
 		if v := os.Getenv(k); v != "" {
@@ -254,6 +268,12 @@ func (c *Config) normalize() {
 	}
 	if c.c.AlertCooldown < 10 {
 		c.c.AlertCooldown = 300
+	}
+	if c.c.LoginFailThreshold < 1 {
+		c.c.LoginFailThreshold = d.LoginFailThreshold
+	}
+	if c.c.LoginFailWindow < 30 {
+		c.c.LoginFailWindow = d.LoginFailWindow
 	}
 }
 
@@ -340,6 +360,8 @@ func (c *Config) WebSessionHours() int {
 // Threshold 返回一次检测所需的全部阈值。
 type Thresholds struct {
 	Window, SynFlood, PortScan, ConnRate, UDPFlood, Cooldown int
+	LoginFail, LoginFailWindow                               int
+	LoginFailEnabled                                         bool
 }
 
 func (c *Config) Thresholds() Thresholds {
@@ -349,6 +371,8 @@ func (c *Config) Thresholds() Thresholds {
 		Window: c.c.WindowSeconds, SynFlood: c.c.SynFloodThreshold,
 		PortScan: c.c.PortScanThreshold, ConnRate: c.c.ConnRateThreshold,
 		UDPFlood: c.c.UDPFloodThreshold, Cooldown: c.c.AlertCooldown,
+		LoginFail: c.c.LoginFailThreshold, LoginFailWindow: c.c.LoginFailWindow,
+		LoginFailEnabled: c.c.LoginFailEnabled,
 	}
 }
 

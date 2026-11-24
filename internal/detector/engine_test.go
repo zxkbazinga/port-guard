@@ -128,6 +128,52 @@ func TestCooldown(t *testing.T) {
 	}
 }
 
+func TestLoginBruteForce(t *testing.T) {
+	var alerts []Alert
+	eng, _ := testEngine(t, &alerts)
+	now := time.Now()
+	// 默认阈值 3 次：前 2 次不应触发，第 3 次触发
+	for i := 0; i < 2; i++ {
+		eng.Feed(Observation{Kind: KindLoginFail, IP: "45.33.22.11", Port: 22, TS: now.Add(time.Duration(i) * time.Second)})
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("2 次失败不应封禁，实际 %d 条", len(alerts))
+	}
+	eng.Feed(Observation{Kind: KindLoginFail, IP: "45.33.22.11", Port: 22, TS: now.Add(2 * time.Second)})
+	if len(alerts) != 1 {
+		t.Fatalf("第 3 次失败应触发封禁，实际 %d 条", len(alerts))
+	}
+	if alerts[0].Rule != "login_brute" {
+		t.Fatalf("期望 login_brute，实际 %s", alerts[0].Rule)
+	}
+}
+
+func TestLoginFailDisabled(t *testing.T) {
+	var alerts []Alert
+	eng, cfg := testEngine(t, &alerts)
+	_ = cfg.Update(map[string]any{"login_fail_enabled": false})
+	eng.Reset()
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		eng.Feed(Observation{Kind: KindLoginFail, IP: "45.33.22.12", Port: 22, TS: now})
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("关闭登录爆破检测后不应封禁，实际 %d 条", len(alerts))
+	}
+}
+
+func TestLoginFailIgnoresPrivateIP(t *testing.T) {
+	var alerts []Alert
+	eng, _ := testEngine(t, &alerts)
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		eng.Feed(Observation{Kind: KindLoginFail, IP: "192.168.1.50", Port: 22, TS: now})
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("私网 IP 的登录失败不应触发封禁，实际 %d 条", len(alerts))
+	}
+}
+
 func TestSyslogAlert(t *testing.T) {
 	var alerts []Alert
 	eng, _ := testEngine(t, &alerts)

@@ -117,6 +117,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /config", s.withAuth(s.configSave))
 	s.mux.HandleFunc("GET /events", s.withAuth(s.eventsPage))
 	s.mux.HandleFunc("GET /bans", s.withAuth(s.bansPage))
+	s.mux.HandleFunc("GET /ports", s.withAuth(s.portsPage))
 	// API
 	s.mux.HandleFunc("GET /api/status", s.withAuth(s.apiStatus))
 	s.mux.HandleFunc("GET /api/events", s.withAuth(s.apiEvents))
@@ -206,14 +207,15 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	updates := map[string]any{}
 	boolKeys := []string{"ikuai_ssl", "ignore_private_ips", "detection_enabled", "sniffer_enabled",
-		"syslog_enabled", "conn_poll_enabled", "port_refresh_enabled"}
+		"syslog_enabled", "conn_poll_enabled", "port_refresh_enabled", "login_fail_enabled"}
 	for _, k := range boolKeys {
 		updates[k] = r.FormValue(k) == "on" || r.FormValue(k) == "1"
 	}
 	intKeys := []string{"ikuai_port", "ikuai_timeout", "ban_duration_minutes", "syslog_port",
 		"conn_poll_interval", "port_refresh_interval", "window_seconds", "syn_flood_threshold",
 		"port_scan_threshold", "conn_rate_threshold", "udp_flood_threshold",
-		"alert_cooldown_seconds", "event_retention_days", "web_session_hours"}
+		"alert_cooldown_seconds", "event_retention_days", "web_session_hours",
+		"login_fail_threshold", "login_fail_window_seconds"}
 	for _, k := range intKeys {
 		n, _ := strconv.Atoi(r.FormValue(k))
 		updates[k] = n
@@ -252,6 +254,11 @@ func (s *Server) eventsPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) bansPage(w http.ResponseWriter, _ *http.Request) {
 	bans, _ := s.store.ListBans(false)
 	s.render(w, "bans.html", map[string]any{"Title": "封禁管理", "Bans": bans})
+}
+
+func (s *Server) portsPage(w http.ResponseWriter, _ *http.Request) {
+	ports, _ := s.store.ListPorts(false)
+	s.render(w, "ports.html", map[string]any{"Title": "端口管理", "Ports": ports})
 }
 
 // ------------------------------------------------------------------- API --

@@ -1,7 +1,10 @@
 [
   {
     "attrname": "APP_PORT_WEB",
-    "label": { "en": "Web admin port", "zh": "管理界面端口" },
+    "label": {
+      "en": "Web admin port",
+      "zh": "管理界面端口"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -11,7 +14,10 @@
   },
   {
     "attrname": "PG_IKUAI_HOST",
-    "label": { "en": "iKuai host", "zh": "爱快管理地址" },
+    "label": {
+      "en": "iKuai host",
+      "zh": "爱快管理地址"
+    },
     "type": "text",
     "scope": "config",
     "required": true,
@@ -21,7 +27,10 @@
   },
   {
     "attrname": "PG_IKUAI_PORT",
-    "label": { "en": "iKuai HTTP port", "zh": "爱快管理端口" },
+    "label": {
+      "en": "iKuai HTTP port",
+      "zh": "爱快管理端口"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -31,7 +40,10 @@
   },
   {
     "attrname": "PG_IKUAI_USERNAME",
-    "label": { "en": "iKuai username", "zh": "爱快 API 用户名" },
+    "label": {
+      "en": "iKuai username",
+      "zh": "爱快 API 用户名"
+    },
     "type": "text",
     "scope": "config",
     "required": true,
@@ -41,7 +53,10 @@
   },
   {
     "attrname": "PG_IKUAI_PASSWORD",
-    "label": { "en": "iKuai password", "zh": "爱快 API 密码" },
+    "label": {
+      "en": "iKuai password",
+      "zh": "爱快 API 密码"
+    },
     "type": "password",
     "scope": "config",
     "required": true,
@@ -51,7 +66,10 @@
   },
   {
     "attrname": "PG_BAN_MINUTES",
-    "label": { "en": "Ban duration (minutes, 0=permanent)", "zh": "封禁时长（分钟，0=永久）" },
+    "label": {
+      "en": "Ban duration (minutes, 0=permanent)",
+      "zh": "封禁时长（分钟，0=永久）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -61,7 +79,10 @@
   },
   {
     "attrname": "PG_BAN_MODE",
-    "label": { "en": "Ban mode: auto/blacklist/acl/none", "zh": "封禁方式：auto/blacklist/acl/none" },
+    "label": {
+      "en": "Ban mode: auto/blacklist/acl/none",
+      "zh": "封禁方式：auto/blacklist/acl/none"
+    },
     "type": "text",
     "scope": "config",
     "required": true,
@@ -71,7 +92,10 @@
   },
   {
     "attrname": "PG_DETECTION_ENABLED",
-    "label": { "en": "Enable detection (1/0)", "zh": "启用攻击检测（1/0）" },
+    "label": {
+      "en": "Enable detection (1/0)",
+      "zh": "启用攻击检测（1/0）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -81,7 +105,10 @@
   },
   {
     "attrname": "PG_SNIFFER_ENABLED",
-    "label": { "en": "Enable packet capture (1/0)", "zh": "启用抓包检测（1/0）" },
+    "label": {
+      "en": "Enable packet capture (1/0)",
+      "zh": "启用抓包检测（1/0）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -91,7 +118,10 @@
   },
   {
     "attrname": "PG_SNIFFER_IFACE",
-    "label": { "en": "Capture interface (any=all)", "zh": "抓包网卡（any=全部）" },
+    "label": {
+      "en": "Capture interface (any=all)",
+      "zh": "抓包网卡（any=全部）"
+    },
     "type": "text",
     "scope": "config",
     "required": true,
@@ -101,7 +131,10 @@
   },
   {
     "attrname": "PG_SYSLOG_ENABLED",
-    "label": { "en": "Enable Syslog receiver (1/0)", "zh": "启用 Syslog 接收（1/0）" },
+    "label": {
+      "en": "Enable Syslog receiver (1/0)",
+      "zh": "启用 Syslog 接收（1/0）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -111,7 +144,10 @@
   },
   {
     "attrname": "PG_SYSLOG_PORT",
-    "label": { "en": "Syslog UDP port", "zh": "Syslog 监听端口" },
+    "label": {
+      "en": "Syslog UDP port",
+      "zh": "Syslog 监听端口"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -121,7 +157,10 @@
   },
   {
     "attrname": "PG_CONN_POLL_ENABLED",
-    "label": { "en": "Poll iKuai connection table (1/0)", "zh": "轮询爱快连接表（1/0）" },
+    "label": {
+      "en": "Poll iKuai connection table (1/0)",
+      "zh": "轮询爱快连接表（1/0）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -131,7 +170,10 @@
   },
   {
     "attrname": "PG_PORT_REFRESH_ENABLED",
-    "label": { "en": "Auto-sync port mappings (1/0)", "zh": "自动同步端口映射（1/0）" },
+    "label": {
+      "en": "Auto-sync port mappings (1/0)",
+      "zh": "自动同步端口映射（1/0）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -141,7 +183,10 @@
   },
   {
     "attrname": "PG_WINDOW_SECONDS",
-    "label": { "en": "Detection window (seconds)", "zh": "检测统计窗口（秒）" },
+    "label": {
+      "en": "Detection window (seconds)",
+      "zh": "检测统计窗口（秒）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -151,7 +196,10 @@
   },
   {
     "attrname": "PG_SYN_FLOOD_THRESHOLD",
-    "label": { "en": "SYN flood threshold", "zh": "SYN Flood 阈值" },
+    "label": {
+      "en": "SYN flood threshold",
+      "zh": "SYN Flood 阈值"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -161,7 +209,10 @@
   },
   {
     "attrname": "PG_PORT_SCAN_THRESHOLD",
-    "label": { "en": "Port scan threshold (distinct ports)", "zh": "端口扫描阈值（不同端口数）" },
+    "label": {
+      "en": "Port scan threshold (distinct ports)",
+      "zh": "端口扫描阈值（不同端口数）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -171,7 +222,10 @@
   },
   {
     "attrname": "PG_CONN_RATE_THRESHOLD",
-    "label": { "en": "Connection rate threshold", "zh": "连接频率阈值" },
+    "label": {
+      "en": "Connection rate threshold",
+      "zh": "连接频率阈值"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -181,7 +235,10 @@
   },
   {
     "attrname": "PG_UDP_FLOOD_THRESHOLD",
-    "label": { "en": "UDP flood threshold", "zh": "UDP Flood 阈值" },
+    "label": {
+      "en": "UDP flood threshold",
+      "zh": "UDP Flood 阈值"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
@@ -191,7 +248,10 @@
   },
   {
     "attrname": "PG_WHITELIST",
-    "label": { "en": "Whitelist CIDRs (comma separated)", "zh": "白名单 CIDR（逗号分隔）" },
+    "label": {
+      "en": "Whitelist CIDRs (comma separated)",
+      "zh": "白名单 CIDR（逗号分隔）"
+    },
     "type": "text",
     "scope": "config",
     "required": true,
@@ -201,7 +261,10 @@
   },
   {
     "attrname": "PG_WEB_USERNAME",
-    "label": { "en": "Web admin username", "zh": "管理界面用户名" },
+    "label": {
+      "en": "Web admin username",
+      "zh": "管理界面用户名"
+    },
     "type": "text",
     "scope": "config",
     "required": true,
@@ -211,12 +274,52 @@
   },
   {
     "attrname": "PG_IGNORE_PRIVATE_IPS",
-    "label": { "en": "Ignore private IPs (1/0)", "zh": "忽略私网地址（1/0）" },
+    "label": {
+      "en": "Ignore private IPs (1/0)",
+      "zh": "忽略私网地址（1/0）"
+    },
     "type": "integer",
     "scope": "config",
     "required": true,
     "default": 1,
     "min": 0,
     "max": 1
+  },
+  {
+    "attrname": "PG_LOGIN_FAIL_ENABLED",
+    "label": {
+      "en": "Enable login brute-force protection",
+      "zh": "启用登录爆破防护"
+    },
+    "type": "boolean",
+    "scope": "config",
+    "required": false,
+    "default": true
+  },
+  {
+    "attrname": "PG_LOGIN_FAIL_THRESHOLD",
+    "label": {
+      "en": "Login failure threshold",
+      "zh": "登录失败次数阈值"
+    },
+    "type": "integer",
+    "scope": "config",
+    "required": false,
+    "default": 3,
+    "min": 1,
+    "max": 100
+  },
+  {
+    "attrname": "PG_LOGIN_FAIL_WINDOW",
+    "label": {
+      "en": "Login failure window (seconds)",
+      "zh": "登录失败统计窗口（秒）"
+    },
+    "type": "integer",
+    "scope": "config",
+    "required": false,
+    "default": 300,
+    "min": 30,
+    "max": 86400
   }
 ]

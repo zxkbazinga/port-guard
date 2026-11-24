@@ -52,6 +52,16 @@
 </section>
 
 <section class="panel">
+  <h2>登录爆破防护</h2>
+  <p class="desc">接收群晖 / Windows / Ubuntu 转发的登录失败日志，同一 IP 在窗口内失败达到阈值即封禁。需在各服务器配置将安全日志发送到本机的 Syslog 端口。</p>
+  <div class="form-grid">
+    <label class="check"><input type="checkbox" name="login_fail_enabled" {{checked .Cfg.login_fail_enabled}}> 启用登录爆破检测</label>
+    <label>失败次数阈值<input type="number" name="login_fail_threshold" value="{{.Cfg.login_fail_threshold}}" min="1"></label>
+    <label>统计窗口（秒）<input type="number" name="login_fail_window_seconds" value="{{.Cfg.login_fail_window_seconds}}" min="30"></label>
+  </div>
+</section>
+
+<section class="panel">
   <h2>检测阈值</h2>
   <p class="desc">统计窗口内超过阈值即判定为攻击并自动封禁。数值越大越保守。</p>
   <div class="form-grid">
