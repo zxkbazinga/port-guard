@@ -20,6 +20,7 @@ type Store struct {
 }
 
 // Forward 是一条 TCP 转发规则（代理模式）：监听本机端口，转发到内网后端。
+// ListenTLS 表示监听端用证书终结客户端 HTTPS；BackendTLS 表示到后端重新发起 TLS。
 type Forward struct {
 	ID          int64  `json:"id"`
 	ListenPort  int    `json:"listen_port"`
@@ -29,6 +30,9 @@ type Forward struct {
 	Label       string `json:"label"`
 	Enabled     bool   `json:"enabled"`
 	UpdatedAt   int64  `json:"updated_at"`
+	ListenTLS   bool   `json:"listen_tls"`
+	BackendTLS  bool   `json:"backend_tls"`
+	BackendSNI  string `json:"backend_sni"`
 }
 
 // Event 是一条检测/封禁事件。
@@ -81,7 +85,10 @@ CREATE TABLE IF NOT EXISTS forwards (
     protocol TEXT DEFAULT 'tcp',
     label TEXT DEFAULT '',
     enabled INTEGER DEFAULT 1,
-    updated_at INTEGER DEFAULT 0
+    updated_at INTEGER DEFAULT 0,
+    listen_tls INTEGER DEFAULT 0,
+    backend_tls INTEGER DEFAULT 0,
+    backend_sni TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_events_ip ON events(ip);
@@ -116,7 +123,50 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("初始化数据库失败: %w", err)
 	}
+	if err = migrateForwards(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("升级转发规则表失败: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// migrateForwards 为旧数据库补齐 TLS 终结相关字段，保留既有转发规则。
+func migrateForwards(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(forwards)")
+	if err != nil {
+		return err
+	}
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	migrations := []struct{ name, ddl string }{
+		{"listen_tls", "ALTER TABLE forwards ADD COLUMN listen_tls INTEGER DEFAULT 0"},
+		{"backend_tls", "ALTER TABLE forwards ADD COLUMN backend_tls INTEGER DEFAULT 0"},
+		{"backend_sni", "ALTER TABLE forwards ADD COLUMN backend_sni TEXT DEFAULT ''"},
+	}
+	for _, m := range migrations {
+		if cols[m.name] {
+			continue
+		}
+		if _, err := db.Exec(m.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -340,7 +390,7 @@ func (s *Store) ActiveBanCount() (int, error) {
 func (s *Store) ListForwards(enabledOnly bool) ([]Forward, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	query := "SELECT id, listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at FROM forwards"
+	query := "SELECT id, listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at, listen_tls, backend_tls, backend_sni FROM forwards"
 	if enabledOnly {
 		query += " WHERE enabled = 1"
 	}
@@ -353,12 +403,15 @@ func (s *Store) ListForwards(enabledOnly bool) ([]Forward, error) {
 	var out []Forward
 	for rows.Next() {
 		var f Forward
-		var enabled int
+		var enabled, listenTLS, backendTLS int
 		if err := rows.Scan(&f.ID, &f.ListenPort, &f.BackendIP, &f.BackendPort,
-			&f.Protocol, &f.Label, &enabled, &f.UpdatedAt); err != nil {
+			&f.Protocol, &f.Label, &enabled, &f.UpdatedAt,
+			&listenTLS, &backendTLS, &f.BackendSNI); err != nil {
 			return nil, err
 		}
 		f.Enabled = enabled == 1
+		f.ListenTLS = listenTLS == 1
+		f.BackendTLS = backendTLS == 1
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -371,17 +424,29 @@ func (s *Store) UpsertForward(f Forward) error {
 	if f.Enabled {
 		enabled = 1
 	}
+	listenTLS := 0
+	if f.ListenTLS {
+		listenTLS = 1
+	}
+	backendTLS := 0
+	if f.BackendTLS {
+		backendTLS = 1
+	}
 	_, err := s.db.Exec(`
-INSERT INTO forwards(listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at)
-VALUES(?, ?, ?, ?, ?, ?, ?)
+INSERT INTO forwards(listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at, listen_tls, backend_tls, backend_sni)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(listen_port) DO UPDATE SET
     backend_ip = excluded.backend_ip,
     backend_port = excluded.backend_port,
     protocol = excluded.protocol,
     label = excluded.label,
     enabled = excluded.enabled,
-    updated_at = excluded.updated_at`,
-		f.ListenPort, f.BackendIP, f.BackendPort, f.Protocol, f.Label, enabled, time.Now().Unix())
+    updated_at = excluded.updated_at,
+    listen_tls = excluded.listen_tls,
+    backend_tls = excluded.backend_tls,
+    backend_sni = excluded.backend_sni`,
+		f.ListenPort, f.BackendIP, f.BackendPort, f.Protocol, f.Label, enabled, time.Now().Unix(),
+		listenTLS, backendTLS, f.BackendSNI)
 	return err
 }
 

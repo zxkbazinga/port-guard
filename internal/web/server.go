@@ -2,19 +2,26 @@
 package web
 
 import (
+	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zxkbazinga/port-guard/internal/ban"
+	"github.com/zxkbazinga/port-guard/internal/certsync"
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
 	"github.com/zxkbazinga/port-guard/internal/proxy"
@@ -35,6 +42,7 @@ type Server struct {
 	syslog   *detector.SyslogReceiver
 	proxySrv *proxy.Server
 	bans     *ban.Manager
+	certSync *certsync.Manager
 	log      *slog.Logger
 	sessions *sessionStore
 	tmpl     *template.Template
@@ -42,13 +50,14 @@ type Server struct {
 }
 
 type Components struct {
-	Cfg    *config.Config
-	Store  *store.Store
-	Engine *detector.Engine
-	Syslog *detector.SyslogReceiver
-	Proxy  *proxy.Server
-	Bans   *ban.Manager
-	Log    *slog.Logger
+	Cfg      *config.Config
+	Store    *store.Store
+	Engine   *detector.Engine
+	Syslog   *detector.SyslogReceiver
+	Proxy    *proxy.Server
+	Bans     *ban.Manager
+	CertSync *certsync.Manager
+	Log      *slog.Logger
 }
 
 func NewServer(c Components) (*Server, error) {
@@ -81,7 +90,7 @@ func NewServer(c Components) (*Server, error) {
 	}
 	s := &Server{
 		cfg: c.Cfg, store: c.Store, engine: c.Engine, syslog: c.Syslog, proxySrv: c.Proxy,
-		bans: c.Bans, log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
+		bans: c.Bans, certSync: c.CertSync, log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
 	}
 	s.routes()
 	return s, nil
@@ -115,6 +124,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/bans", s.withAuth(s.apiBans))
 	s.mux.HandleFunc("GET /api/config", s.withAuth(s.apiConfigGet))
 	s.mux.HandleFunc("POST /api/config", s.withAuth(s.apiConfigSet))
+	s.mux.HandleFunc("GET /api/certs/status", s.withAuth(s.apiCertStatus))
+	s.mux.HandleFunc("POST /api/certs", s.withAuth(s.apiCertUpload))
+	s.mux.HandleFunc("POST /api/certs/push", s.withAuth(s.apiCertPush))
+	s.mux.HandleFunc("POST /api/certs/pull", s.withAuth(s.apiCertPull))
 	s.mux.HandleFunc("GET /api/forwards", s.withAuth(s.apiForwards))
 	s.mux.HandleFunc("POST /api/forwards", s.withAuth(s.apiForwardAdd))
 	s.mux.HandleFunc("POST /api/forwards/{id}/toggle", s.withAuth(s.apiForwardToggle))
@@ -130,6 +143,10 @@ func (s *Server) routes() {
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.validAPIToken(r) {
+			next(w, r)
+			return
+		}
 		cookie, err := r.Cookie("pg_session")
 		if err != nil || !s.sessions.valid(cookie.Value) {
 			if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -141,6 +158,25 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// validAPIToken 校验脚本调用的 Bearer Token。仅对 API 路径生效，且必须显式配置。
+func (s *Server) validAPIToken(r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") {
+		return false
+	}
+	token := s.cfg.APIToken()
+	if token == "" {
+		return false
+	}
+	supplied := ""
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		supplied = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	}
+	if supplied == "" {
+		supplied = r.Header.Get("X-API-Token")
+	}
+	return supplied != "" && subtle.ConstantTimeCompare([]byte(supplied), []byte(token)) == 1
 }
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +231,7 @@ func (s *Server) configPage(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	updates := map[string]any{}
-	boolKeys := []string{"ignore_private_ips", "detection_enabled", "login_fail_enabled", "proxy_enabled"}
+	boolKeys := []string{"ignore_private_ips", "detection_enabled", "login_fail_enabled", "proxy_enabled", "cert_sync_enabled"}
 	for _, k := range boolKeys {
 		updates[k] = r.FormValue(k) == "on" || r.FormValue(k) == "1"
 	}
@@ -203,12 +239,13 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 		"port_scan_threshold", "conn_rate_threshold", "udp_flood_threshold",
 		"alert_cooldown_seconds", "event_retention_days", "web_session_hours",
 		"login_fail_threshold", "login_fail_window_seconds",
-		"proxy_port_start", "proxy_port_end"}
+		"proxy_port_start", "proxy_port_end", "cert_sync_interval_seconds"}
 	for _, k := range intKeys {
 		n, _ := strconv.Atoi(r.FormValue(k))
 		updates[k] = n
 	}
-	strKeys := []string{"whitelist", "web_username"}
+	strKeys := []string{"whitelist", "web_username", "api_token", "tls_cert_file", "tls_key_file",
+		"cert_sync_url", "cert_sync_cert_url", "cert_sync_key_url", "cert_sync_token"}
 	for _, k := range strKeys {
 		updates[k] = strings.TrimSpace(r.FormValue(k))
 	}
@@ -223,6 +260,9 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	}
 	s.engine.Reset()
 	s.reloadProxy()
+	if s.certSync != nil {
+		go func() { _ = s.certSync.SyncNow() }()
+	}
 	s.render(w, "config.html", map[string]any{
 		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Saved": true,
 	})
@@ -330,6 +370,9 @@ func (s *Server) apiConfigSet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.engine.Reset()
 	s.reloadProxy()
+	if s.certSync != nil {
+		go func() { _ = s.certSync.SyncNow() }()
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -352,6 +395,187 @@ func normalizeConfigPayload(payload map[string]any) error {
 	return nil
 }
 
+// -------------------------------------------------------------- certs API --
+
+func (s *Server) apiCertStatus(w http.ResponseWriter, _ *http.Request) {
+	certFile, keyFile := s.cfg.TLSFiles()
+	status := map[string]any{
+		"cert_path": certFile, "key_path": keyFile,
+		"cert_exists": false, "key_exists": false, "ready": false,
+	}
+	certInfo, certErr := os.Stat(certFile)
+	status["cert_exists"] = certErr == nil && !certInfo.IsDir()
+	keyInfo, keyErr := os.Stat(keyFile)
+	status["key_exists"] = keyErr == nil && !keyInfo.IsDir()
+	if status["cert_exists"].(bool) && status["key_exists"].(bool) {
+		certPEM, err1 := os.ReadFile(certFile)
+		keyPEM, err2 := os.ReadFile(keyFile)
+		if err1 == nil && err2 == nil {
+			pair, err := tls.X509KeyPair(certPEM, keyPEM)
+			if err == nil && len(pair.Certificate) > 0 {
+				if leaf, err := x509.ParseCertificate(pair.Certificate[0]); err == nil {
+					status["ready"] = true
+					status["subject"] = leaf.Subject.String()
+					status["not_after"] = leaf.NotAfter.Format("2006-01-02 15:04:05")
+					status["dns_names"] = leaf.DNSNames
+				}
+			}
+		}
+	}
+	if s.certSync != nil {
+		status["sync"] = s.certSync.Stats()
+	}
+	writeJSON(w, 200, status)
+}
+
+func (s *Server) apiCertPull(w http.ResponseWriter, r *http.Request) {
+	if s.certSync == nil {
+		writeJSON(w, 400, map[string]any{"error": "证书自动同步不可用"})
+		return
+	}
+	if err := s.certSync.SyncNow(); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	s.apiCertStatus(w, r)
+}
+
+func (s *Server) apiCertUpload(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CertPEM string `json:"cert_pem"`
+		KeyPEM  string `json:"key_pem"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, 400, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	if err := s.saveCertPair(body.CertPEM, body.KeyPEM); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	s.apiCertStatus(w, r)
+}
+
+// apiCertPush 接收脚本（如 Gately 的「复制后执行」）以 multipart/form-data
+// 推送的证书链与私钥。字段名兼容 cert/key、cert_pem/key_pem、fullchain/privkey。
+func (s *Server) apiCertPush(w http.ResponseWriter, r *http.Request) {
+	certPEM, keyPEM, err := readCertForm(r)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.saveCertPair(certPEM, keyPEM); err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	s.log.Info("证书已通过推送接口更新并重载")
+	s.apiCertStatus(w, r)
+}
+
+func readCertForm(r *http.Request) (string, string, error) {
+	const maxUpload = 2 << 20 // 2 MiB，足够完整的证书链与私钥
+	if err := r.ParseMultipartForm(maxUpload); err != nil {
+		return "", "", fmt.Errorf("表单解析失败: %w", err)
+	}
+	readField := func(names ...string) string {
+		for _, name := range names {
+			if v := strings.TrimSpace(r.FormValue(name)); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	readFile := func(names ...string) string {
+		for _, name := range names {
+			f, _, err := r.FormFile(name)
+			if err != nil {
+				continue
+			}
+			data, readErr := io.ReadAll(io.LimitReader(f, maxUpload))
+			_ = f.Close()
+			if readErr == nil {
+				if v := strings.TrimSpace(string(data)); v != "" {
+					return v
+				}
+			}
+		}
+		return ""
+	}
+	cert := readField("cert_pem", "cert", "fullchain")
+	key := readField("key_pem", "key", "privkey")
+	if cert == "" {
+		cert = readFile("cert", "cert_pem", "fullchain", "cert_file")
+	}
+	if key == "" {
+		key = readFile("key", "key_pem", "privkey", "key_file")
+	}
+	if cert == "" || key == "" {
+		return "", "", fmt.Errorf("缺少证书或私钥（字段名 cert/key 或 cert_pem/key_pem）")
+	}
+	return cert, key, nil
+}
+
+// saveCertPair 校验证书与私钥匹配后原子写入配置路径并重建监听器。
+func (s *Server) saveCertPair(certPEM, keyPEM string) error {
+	certPEM, keyPEM = strings.TrimSpace(certPEM), strings.TrimSpace(keyPEM)
+	if certPEM == "" || keyPEM == "" {
+		return fmt.Errorf("证书链和私钥不能为空")
+	}
+	pair, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil || len(pair.Certificate) == 0 {
+		return fmt.Errorf("证书与私钥不匹配或格式错误：%s", errText(err))
+	}
+	certFile, keyFile := s.cfg.TLSFiles()
+	if filepath.Clean(certFile) == filepath.Clean(keyFile) {
+		return fmt.Errorf("证书与私钥路径不能相同")
+	}
+	if err := writePEMAtomic(certFile, []byte(certPEM+"\n"), 0o644); err != nil {
+		return fmt.Errorf("写入证书失败：%s", err.Error())
+	}
+	if err := writePEMAtomic(keyFile, []byte(keyPEM+"\n"), 0o600); err != nil {
+		return fmt.Errorf("写入私钥失败：%s", err.Error())
+	}
+	s.reloadProxy()
+	return nil
+}
+
+func errText(err error) string {
+	if err == nil {
+		return "未知错误"
+	}
+	return err.Error()
+}
+
+// writePEMAtomic 在同目录临时文件写入后原子替换，避免写一半时代理重载读到损坏文件。
+func writePEMAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".pg-cert-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
 // ---------------------------------------------------------- forwards API --
 
 func (s *Server) apiForwards(w http.ResponseWriter, _ *http.Request) {
@@ -370,6 +594,9 @@ func (s *Server) apiForwardAdd(w http.ResponseWriter, r *http.Request) {
 		BackendPort int    `json:"backend_port"`
 		Protocol    string `json:"protocol"`
 		Label       string `json:"label"`
+		ListenTLS   bool   `json:"listen_tls"`
+		BackendTLS  bool   `json:"backend_tls"`
+		BackendSNI  string `json:"backend_sni"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]any{"error": "请求格式错误"})
@@ -389,6 +616,8 @@ func (s *Server) apiForwardAdd(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.UpsertForward(store.Forward{
 		ListenPort: body.ListenPort, BackendIP: body.BackendIP, BackendPort: body.BackendPort,
 		Protocol: body.Protocol, Label: body.Label, Enabled: true,
+		ListenTLS: body.ListenTLS, BackendTLS: body.BackendTLS,
+		BackendSNI: strings.TrimSpace(body.BackendSNI),
 	}); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return

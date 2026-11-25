@@ -4,10 +4,12 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"io"
 	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -126,19 +128,90 @@ func (p *Server) Reload() error {
 	if err != nil {
 		return err
 	}
+	// 只有存在 TLS 终结规则时才要求证书文件存在，避免纯 TCP 用户被证书配置卡住。
+	var tlsCfg *tls.Config
 	for _, f := range forwards {
-		ln, err := net.Listen("tcp", ":"+strconv.Itoa(f.ListenPort))
+		if f.ListenTLS {
+			tlsCfg, err = p.loadTLSConfig()
+			if err != nil {
+				p.log.Warn("TLS 证书加载失败，入口 HTTPS 规则将跳过", "err", err)
+				tlsCfg = nil
+			}
+			break
+		}
+	}
+	for _, f := range forwards {
+		rawLn, err := net.Listen("tcp", ":"+strconv.Itoa(f.ListenPort))
 		if err != nil {
 			p.log.Warn("转发监听失败", "port", f.ListenPort, "err", err)
 			continue
 		}
+		var ln net.Listener = rawLn
+		if f.ListenTLS {
+			if tlsCfg == nil {
+				_ = rawLn.Close()
+				p.log.Warn("跳过 TLS 规则：证书不可用", "port", f.ListenPort)
+				continue
+			}
+			ln = tls.NewListener(rawLn, tlsCfg)
+		}
 		p.listeners[f.ListenPort] = ln
 		p.log.Info("转发监听已启动", "listen", f.ListenPort,
-			"backend", net.JoinHostPort(f.BackendIP, strconv.Itoa(f.BackendPort)), "label", f.Label)
+			"backend", net.JoinHostPort(f.BackendIP, strconv.Itoa(f.BackendPort)),
+			"listen_tls", f.ListenTLS, "backend_tls", f.BackendTLS, "label", f.Label)
 		go p.serve(ln, f)
 	}
 	p.running.Store(len(p.listeners) > 0)
 	return nil
+}
+
+// loadTLSConfig 从配置指定的 PEM 文件加载证书与私钥。
+func (p *Server) loadTLSConfig() (*tls.Config, error) {
+	certFile, keyFile := p.cfg.TLSFiles()
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
+}
+
+// prepareFrontend 完成入口侧 TLS 握手，并返回握手中的 SNI（作为后端 TLS 的优先 ServerName）。
+// 非 TLS 规则原样返回连接。
+func (p *Server) prepareFrontend(conn net.Conn, f store.Forward, start time.Time, srcIP, backend string) (net.Conn, string, bool) {
+	if !f.ListenTLS {
+		return conn, "", true
+	}
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		p.record(start, srcIP, f, backend, "TLS配置错误", time.Since(start))
+		p.log.Warn("TLS 规则收到非 TLS 连接", "listen", f.ListenPort)
+		return nil, "", false
+	}
+	_ = tc.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if err := tc.Handshake(); err != nil {
+		p.record(start, srcIP, f, backend, "TLS握手失败", time.Since(start))
+		p.log.Warn("入口 TLS 握手失败", "listen", f.ListenPort, "ip", srcIP, "err", err)
+		return nil, "", false
+	}
+	_ = tc.SetReadDeadline(time.Time{})
+	serverName := tc.ConnectionState().ServerName
+	return tc, serverName, true
+}
+
+// dialBackend 建立到后端的连接；如规则启用后端 TLS，则用 SNI/后端 IP 发起 TLS。
+func (p *Server) dialBackend(f store.Forward, backend, clientSNI string) (net.Conn, error) {
+	if !f.BackendTLS {
+		return net.DialTimeout("tcp", backend, 5*time.Second)
+	}
+	serverName := strings.TrimSpace(f.BackendSNI)
+	if serverName == "" {
+		serverName = strings.TrimSpace(clientSNI)
+	}
+	if serverName == "" {
+		serverName = f.BackendIP
+	}
+	return tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", backend,
+		&tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12})
 }
 
 func (p *Server) serve(ln net.Listener, f store.Forward) {
@@ -209,7 +282,12 @@ func (p *Server) handle(conn net.Conn, f store.Forward) {
 }
 
 func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Forward, start time.Time, action string) {
-	upstream, err := net.DialTimeout("tcp", backend, 5*time.Second)
+	frontend, clientSNI, ok := p.prepareFrontend(conn, f, start, srcIP, backend)
+	if !ok {
+		return
+	}
+	conn = frontend
+	upstream, err := p.dialBackend(f, backend, clientSNI)
 	if err != nil {
 		p.record(start, srcIP, f, backend, "后端不可达", time.Since(start))
 		p.log.Warn("转发后端不可达", "listen", f.ListenPort, "backend", backend, "err", err)
@@ -223,12 +301,8 @@ func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Fo
 	recID := p.record(start, srcIP, f, backend, action, 0)
 
 	// NoDelay 减少小包延迟（SSH/RDP 交互场景）
-	if tc, ok := conn.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-	}
-	if tc, ok := upstream.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-	}
+	setNoDelay(conn)
+	setNoDelay(upstream)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -243,14 +317,34 @@ func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Fo
 			return
 		}
 		// 半关闭：让对端读完剩余数据
-		if c, ok := dst.(*net.TCPConn); ok {
-			_ = c.CloseWrite()
-		}
+		closeWrite(dst)
 	}
 	go pump(upstream, conn)
 	go pump(conn, upstream)
 	wg.Wait()
 	p.finishRecord(recID, time.Since(start))
+}
+
+// setNoDelay 对 TCP 连接及 TLS 包装下的底层 TCP 连接关闭 Nagle 算法。
+func setNoDelay(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+		return
+	}
+	if wrapper, ok := c.(interface{ NetConn() net.Conn }); ok {
+		setNoDelay(wrapper.NetConn())
+	}
+}
+
+// closeWrite 对 TCP 连接及 TLS 包装下的底层 TCP 连接做半关闭。
+func closeWrite(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.CloseWrite()
+		return
+	}
+	if wrapper, ok := c.(interface{ NetConn() net.Conn }); ok {
+		closeWrite(wrapper.NetConn())
+	}
 }
 
 // record 立即写入一条日志并返回其 ID，便于连接关闭后回填耗时。

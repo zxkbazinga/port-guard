@@ -24,6 +24,7 @@ type values struct {
 	WebUsername     string `json:"web_username"`
 	WebPasswordHash string `json:"web_password_hash"`
 	WebSessionHours int    `json:"web_session_hours"`
+	APIToken        string `json:"api_token"` // 供脚本调用的 Bearer Token，留空则禁用 Token 认证
 	// 封禁
 	BanDurationMinutes int    `json:"ban_duration_minutes"`
 	Whitelist          string `json:"whitelist"`
@@ -47,6 +48,16 @@ type values struct {
 	ProxyEnabled   bool `json:"proxy_enabled"`
 	ProxyPortStart int  `json:"proxy_port_start"`
 	ProxyPortEnd   int  `json:"proxy_port_end"`
+	// TLS 终结：证书与私钥文件（通过 SSH 放到 /data/certs/ 下即可）
+	TLSCertFile string `json:"tls_cert_file"`
+	TLSKeyFile  string `json:"tls_key_file"`
+	// TLS 证书自动同步：定时从内网网关拉取证书与私钥
+	CertSyncEnabled         bool   `json:"cert_sync_enabled"`
+	CertSyncURL             string `json:"cert_sync_url"`
+	CertSyncCertURL         string `json:"cert_sync_cert_url"`
+	CertSyncKeyURL          string `json:"cert_sync_key_url"`
+	CertSyncToken           string `json:"cert_sync_token"`
+	CertSyncIntervalSeconds int    `json:"cert_sync_interval_seconds"`
 }
 
 func defaults() values {
@@ -61,6 +72,9 @@ func defaults() values {
 		EventRetentionDays: 3,
 		LoginFailEnabled:   true, LoginFailThreshold: 3, LoginFailWindow: 300,
 		ProxyEnabled: false, ProxyPortStart: ProxyPortPhysicalMin, ProxyPortEnd: ProxyPortPhysicalMax,
+		TLSCertFile: "/data/certs/fullchain.pem", TLSKeyFile: "/data/certs/privkey.pem",
+		CertSyncEnabled: false, CertSyncURL: "", CertSyncCertURL: "", CertSyncKeyURL: "",
+		CertSyncToken: "", CertSyncIntervalSeconds: 3600,
 	}
 }
 
@@ -95,6 +109,8 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.WebPasswordHash)
 	case "web_session_hours":
 		get(raw, &v.WebSessionHours)
+	case "api_token":
+		get(raw, &v.APIToken)
 	case "ban_duration_minutes":
 		get(raw, &v.BanDurationMinutes)
 	case "whitelist":
@@ -131,6 +147,22 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.ProxyPortStart)
 	case "proxy_port_end":
 		get(raw, &v.ProxyPortEnd)
+	case "tls_cert_file":
+		get(raw, &v.TLSCertFile)
+	case "tls_key_file":
+		get(raw, &v.TLSKeyFile)
+	case "cert_sync_enabled":
+		get(raw, &v.CertSyncEnabled)
+	case "cert_sync_url":
+		get(raw, &v.CertSyncURL)
+	case "cert_sync_cert_url":
+		get(raw, &v.CertSyncCertURL)
+	case "cert_sync_key_url":
+		get(raw, &v.CertSyncKeyURL)
+	case "cert_sync_token":
+		get(raw, &v.CertSyncToken)
+	case "cert_sync_interval_seconds":
+		get(raw, &v.CertSyncIntervalSeconds)
 	}
 }
 
@@ -143,6 +175,7 @@ func get(raw json.RawMessage, out any) {
 func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 	envKey := map[string]string{
 		"PG_WEB_USERNAME":   "web_username",
+		"PG_API_TOKEN":      "api_token",
 		"PG_WHITELIST":      "whitelist",
 		"PG_BAN_MINUTES":    "ban_duration_minutes",
 		"PG_SYSLOG_PORT":    "syslog_port",
@@ -152,9 +185,17 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_UDP_FLOOD_THRESHOLD": "udp_flood_threshold", "PG_ALERT_COOLDOWN": "alert_cooldown_seconds",
 		"PG_EVENT_RETENTION_DAYS": "event_retention_days", "PG_WEB_SESSION_HOURS": "web_session_hours",
 		"PG_LOGIN_FAIL_THRESHOLD": "login_fail_threshold", "PG_LOGIN_FAIL_WINDOW": "login_fail_window_seconds",
-		"PG_PROXY_ENABLED":    "proxy_enabled",
-		"PG_PROXY_PORT_START": "proxy_port_start",
-		"PG_PROXY_PORT_END":   "proxy_port_end",
+		"PG_PROXY_ENABLED":      "proxy_enabled",
+		"PG_PROXY_PORT_START":   "proxy_port_start",
+		"PG_PROXY_PORT_END":     "proxy_port_end",
+		"PG_TLS_CERT_FILE":      "tls_cert_file",
+		"PG_TLS_KEY_FILE":       "tls_key_file",
+		"PG_CERT_SYNC_ENABLED":  "cert_sync_enabled",
+		"PG_CERT_SYNC_URL":      "cert_sync_url",
+		"PG_CERT_SYNC_CERT_URL": "cert_sync_cert_url",
+		"PG_CERT_SYNC_KEY_URL":  "cert_sync_key_url",
+		"PG_CERT_SYNC_TOKEN":    "cert_sync_token",
+		"PG_CERT_SYNC_INTERVAL": "cert_sync_interval_seconds",
 	}
 	use := func(envName string) bool {
 		if v := os.Getenv(envName); v == "" {
@@ -168,8 +209,15 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		return !saved
 	}
 	envStr := map[string]*string{
-		"PG_WEB_USERNAME": &c.c.WebUsername,
-		"PG_WHITELIST":    &c.c.Whitelist,
+		"PG_WEB_USERNAME":       &c.c.WebUsername,
+		"PG_API_TOKEN":          &c.c.APIToken,
+		"PG_WHITELIST":          &c.c.Whitelist,
+		"PG_TLS_CERT_FILE":      &c.c.TLSCertFile,
+		"PG_TLS_KEY_FILE":       &c.c.TLSKeyFile,
+		"PG_CERT_SYNC_URL":      &c.c.CertSyncURL,
+		"PG_CERT_SYNC_CERT_URL": &c.c.CertSyncCertURL,
+		"PG_CERT_SYNC_KEY_URL":  &c.c.CertSyncKeyURL,
+		"PG_CERT_SYNC_TOKEN":    &c.c.CertSyncToken,
 	}
 	for k, p := range envStr {
 		if use(k) {
@@ -191,6 +239,7 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_LOGIN_FAIL_WINDOW":    &c.c.LoginFailWindow,
 		"PG_PROXY_PORT_START":     &c.c.ProxyPortStart,
 		"PG_PROXY_PORT_END":       &c.c.ProxyPortEnd,
+		"PG_CERT_SYNC_INTERVAL":   &c.c.CertSyncIntervalSeconds,
 	}
 	for k, p := range envInt {
 		if use(k) {
@@ -204,6 +253,7 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_DETECTION_ENABLED":  &c.c.DetectionEnabled,
 		"PG_LOGIN_FAIL_ENABLED": &c.c.LoginFailEnabled,
 		"PG_PROXY_ENABLED":      &c.c.ProxyEnabled,
+		"PG_CERT_SYNC_ENABLED":  &c.c.CertSyncEnabled,
 	}
 	for k, p := range envBool {
 		if use(k) {
@@ -258,6 +308,18 @@ func (c *Config) normalize() {
 	if c.c.ProxyPortEnd < c.c.ProxyPortStart {
 		c.c.ProxyPortEnd = c.c.ProxyPortStart
 	}
+	if strings.TrimSpace(c.c.TLSCertFile) == "" {
+		c.c.TLSCertFile = d.TLSCertFile
+	}
+	if strings.TrimSpace(c.c.TLSKeyFile) == "" {
+		c.c.TLSKeyFile = d.TLSKeyFile
+	}
+	c.c.CertSyncURL = strings.TrimSpace(c.c.CertSyncURL)
+	c.c.CertSyncCertURL = strings.TrimSpace(c.c.CertSyncCertURL)
+	c.c.CertSyncKeyURL = strings.TrimSpace(c.c.CertSyncKeyURL)
+	if c.c.CertSyncIntervalSeconds < 60 || c.c.CertSyncIntervalSeconds > 86400 {
+		c.c.CertSyncIntervalSeconds = d.CertSyncIntervalSeconds
+	}
 }
 
 // Snapshot 返回配置快照（用于页面渲染与 API）。
@@ -267,6 +329,14 @@ func (c *Config) Snapshot(maskSecrets bool) map[string]any {
 	raw, _ := json.Marshal(c.c)
 	out := map[string]any{}
 	_ = json.Unmarshal(raw, &out)
+	if maskSecrets {
+		if out["cert_sync_token"] != "" {
+			out["cert_sync_token"] = "********"
+		}
+		if out["api_token"] != "" {
+			out["api_token"] = "********"
+		}
+	}
 	return out
 }
 
@@ -286,6 +356,20 @@ func (c *Config) EventRetentionDays() int {
 }
 func (c *Config) ProxyEnabled() bool { c.mu.RLock(); defer c.mu.RUnlock(); return c.c.ProxyEnabled }
 
+func (c *Config) TLSFiles() (string, string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.TLSCertFile, c.c.TLSKeyFile
+}
+
+// CertSyncSettings 返回证书自动同步配置。
+func (c *Config) CertSyncSettings() (enabled bool, url, certURL, keyURL, token string, interval int) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.CertSyncEnabled, c.c.CertSyncURL, c.c.CertSyncCertURL,
+		c.c.CertSyncKeyURL, c.c.CertSyncToken, c.c.CertSyncIntervalSeconds
+}
+
 // ProxyPortRange 返回当前配置的代理监听端口池范围 [start, end]。
 func (c *Config) ProxyPortRange() (int, int) {
 	c.mu.RLock()
@@ -294,6 +378,11 @@ func (c *Config) ProxyPortRange() (int, int) {
 }
 
 func (c *Config) WebUsername() string { c.mu.RLock(); defer c.mu.RUnlock(); return c.c.WebUsername }
+func (c *Config) APIToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.APIToken
+}
 func (c *Config) WebPasswordHash() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -384,6 +473,12 @@ func (c *Config) Update(values map[string]any) error {
 	for key, value := range values {
 		if _, ok := asMap[key]; !ok {
 			continue
+		}
+		// Web 页面显示的是掩码，原样提交时不能把真实 Token 覆盖成星号。
+		if key == "cert_sync_token" || key == "api_token" {
+			if s, ok := value.(string); ok && s == "********" {
+				continue
+			}
 		}
 		encoded, err := json.Marshal(value)
 		if err != nil {

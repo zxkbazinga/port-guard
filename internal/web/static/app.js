@@ -3,7 +3,7 @@
   'use strict';
   var path = window.location.pathname;
   if (path === '/') setupDashboard();
-  if (path === '/config') setupSectionSaves();
+  if (path === '/config') { setupSectionSaves(); setupCertUpload(); }
   if (path === '/proxy') setupProxyLogs();
 
   function setupDashboard() {
@@ -175,6 +175,174 @@
       }
     });
     return payload;
+  }
+
+  function setupCertUpload() {
+    const btn = document.getElementById('certUploadBtn');
+    const certInput = document.getElementById('certFileInput');
+    const keyInput = document.getElementById('keyFileInput');
+    const status = document.getElementById('certStatus');
+    const result = document.getElementById('certUploadResult');
+    const pullBtn = document.getElementById('certPullBtn');
+    const pullResult = document.getElementById('certPullResult');
+    const genTokenBtn = document.getElementById('genTokenBtn');
+    const copyPushBtn = document.getElementById('copyPushBtn');
+    const pushResult = document.getElementById('pushCopyResult');
+    const pushCmd = document.getElementById('pushCommand');
+    const tokenInput = document.querySelector('input[name="api_token"]');
+    if (!btn || !certInput || !keyInput) return;
+
+    if (genTokenBtn && tokenInput) {
+      genTokenBtn.addEventListener('click', function () {
+        const arr = new Uint8Array(24);
+        (window.crypto || window.msCrypto).getRandomValues(arr);
+        const token = Array.prototype.map.call(arr, function (b) {
+          return ('0' + b.toString(16)).slice(-2);
+        }).join('');
+        tokenInput.value = token;
+        tokenInput.type = 'text';
+        if (pushCmd) {
+          pushCmd.value = pushCmd.value.replace('YOUR_API_TOKEN', token);
+        }
+        showFeedback(pushResult, true, '✓ 已生成，请点「保存」生效');
+      });
+    }
+
+    if (copyPushBtn && pushCmd) {
+      copyPushBtn.addEventListener('click', async function () {
+        try {
+          const text = pushCmd.value;
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (!ok) throw new Error('浏览器拒绝复制');
+          }
+          showFeedback(pushResult, true, '✓ 已复制命令');
+        } catch (e) {
+          showFeedback(pushResult, false, '复制失败：' + String(e));
+        }
+      });
+    }
+
+    refreshStatus();
+
+    btn.addEventListener('click', async function () {
+      if (!certInput.files || !certInput.files[0] || !keyInput.files || !keyInput.files[0]) {
+        showFeedback(result, false, '请选择证书链和私钥文件');
+        return;
+      }
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '上传中…';
+      try {
+        const certPEM = await readFileText(certInput.files[0]);
+        const keyPEM = await readFileText(keyInput.files[0]);
+        const res = await fetch('/api/certs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ cert_pem: certPEM, key_pem: keyPEM })
+        });
+        let data = null;
+        try { data = await res.json(); } catch (e) { /* 非 JSON 响应 */ }
+        if (!res.ok || !data || !data.ready) {
+          const msg = data && data.error ? data.error : ('HTTP ' + res.status);
+          showFeedback(result, false, '上传失败：' + msg);
+          return;
+        }
+        showFeedback(result, true, '✓ 已上传并生效');
+        applyStatus(data);
+      } catch (e) {
+        showFeedback(result, false, '上传失败：' + String(e));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+
+    if (pullBtn) {
+      pullBtn.addEventListener('click', async function () {
+        const original = pullBtn.textContent;
+        pullBtn.disabled = true;
+        pullBtn.textContent = '拉取中…';
+        try {
+          const res = await fetch('/api/certs/pull', { method: 'POST', credentials: 'same-origin' });
+          let data = null;
+          try { data = await res.json(); } catch (e) { /* 非 JSON 响应 */ }
+          if (!res.ok || !data) {
+            const msg = data && data.error ? data.error : ('HTTP ' + res.status);
+            showFeedback(pullResult, false, '拉取失败：' + msg);
+            return;
+          }
+          showFeedback(pullResult, true, '✓ 拉取完成');
+          applyStatus(data);
+        } catch (e) {
+          showFeedback(pullResult, false, '拉取失败：' + String(e));
+        } finally {
+          pullBtn.disabled = false;
+          pullBtn.textContent = original;
+        }
+      });
+    }
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch('/api/certs/status', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        applyStatus(await res.json());
+      } catch (e) { /* 静默失败 */ }
+    }
+
+    function applyStatus(data) {
+      if (!status || !data) return;
+      var text;
+      if (data.ready) {
+        text = '✓ 证书已就绪：' + (data.subject || '已加载') +
+          (data.not_after ? '，到期 ' + data.not_after : '') +
+          '。路径：' + data.cert_path;
+        status.style.color = '#15803d';
+      } else if (data.cert_exists && data.key_exists) {
+        text = '证书文件存在，但证书与私钥不匹配或格式错误。路径：' + data.cert_path;
+        status.style.color = '#b91c1c';
+      } else {
+        text = '尚未上传证书。当前读取路径：' + data.cert_path + ' / ' + data.key_path;
+        status.style.color = '';
+      }
+      if (data.sync) {
+        if (!data.sync.enabled) {
+          text += '；自动同步：未启用';
+        } else if (data.sync.last_success) {
+          text += '；自动同步：成功于 ' + new Date(data.sync.last_success * 1000).toLocaleString();
+          if (data.sync.last_changed) {
+            text += '，最近变更 ' + new Date(data.sync.last_changed * 1000).toLocaleString();
+          }
+        } else {
+          text += '；自动同步：已启用，尚未成功';
+        }
+        if (data.sync.last_error) {
+          text += '；错误：' + data.sync.last_error;
+          status.style.color = '#b91c1c';
+        }
+      }
+      status.textContent = text;
+    }
+
+    function readFileText(file) {
+      return new Promise(function (resolve, reject) {
+        const reader = new FileReader();
+        reader.onload = function () { resolve(String(reader.result || '')); };
+        reader.onerror = function () { reject(new Error('读取文件失败')); };
+        reader.readAsText(file);
+      });
+    }
   }
 
   function showFeedback(el, ok, message) {

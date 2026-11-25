@@ -9,6 +9,7 @@
 端口映射把内网服务暴露到公网后，会立刻成为扫描器的目标：SSH 爆破、Redis/MySQL 未授权访问探测、连接频率异常等。爱快自带的 ACL 和黑名单是静态规则，不会根据实时行为动态封禁。Port Guard 补上这一环：
 
 - **串联代理**：爱快外网端口 → 本应用监听端口 → 内网服务，流量必经，在 accept 阶段按对端 IP 做判定（若爱快 DNAT 保留源地址，即为真实公网 IP）
+- **可选 HTTPS 终结**：把证书和私钥放到本应用持久化目录，转发规则勾选「入口 HTTPS」后由 port-guard 完成 TLS 握手，再按配置转发到内网 HTTP 或 HTTPS 服务
 - **本地即时封禁**：命中规则当场断开连接，来自被封 IP 的新连接直接拒绝，**不依赖爱快 API**（也就不受固件接口差异影响）
 - **登录爆破防护**：接收群晖 / Windows / Ubuntu 转发的登录失败日志，同一 IP 失败 3 次即封禁
 - **抑制误封**：私网地址、白名单 CIDR 一律不参与判定
@@ -66,12 +67,93 @@ Web 界面监听 **5657**、Syslog 监听 UDP **5140**、代理池 **22300–223
 
 > **配置持久化**：Web 界面保存的值优先于环境变量。ipkg 的 `environment` 中的 `PG_*` 仅作首次启动初始值，容器重启不会覆盖你在 Web 页面保存的配置。
 
+### HTTPS 证书终结（可选）
+
+如果你希望域名证书放在 port-guard 上，而不是放在网关/群晖上，按下面配置：
+
+**方式一：Gately 自动推送（推荐，全自动）**
+
+如果证书由 Gately 申请/续期，用它的「自动部署 → 复制后执行」在证书更新后自动推送：
+
+1. 进入 port-guard **系统配置 → HTTPS 证书 → 自动推送**，点「生成随机 Token」并**保存**。
+2. 点「复制推送命令」，把命令填到 Gately 自动部署目标的「复制后执行」框：
+
+   ```sh
+   curl -fsS -X POST \
+     -H "Authorization: Bearer YOUR_API_TOKEN" \
+     -F "cert=@$certFile" \
+     -F "key=@$keyFile" \
+     http://PORT_GUARD_IP:5657/api/certs/push
+   ```
+
+   Gately 提供的 `$certFile` / `$keyFile` 变量指向刚复制好的证书与私钥。`YOUR_API_TOKEN` 换成上一步的 Token，`PORT_GUARD_IP` 换成能访问本应用的地址（Gately 在容器内就填容器可达 IP）。
+
+3. 证书签发/续期后 Gately 自动推送，port-guard 校验匹配后原子写入并重载监听器，与页面上传效果一致。免 SSH/SFTP、免登录、免手动干预。
+
+对应接口：`POST /api/certs/push`，支持 Bearer Token 或 `X-API-Token` 请求头，字段可用 multipart 文件 `cert` / `key`（也兼容 `cert_pem` / `key_pem` 文本字段）。未配置 API Token 时该接口拒绝访问。
+
+**方式二：页面手动上传**
+
+进入 **系统配置 → HTTPS 证书（代理 TLS 终结）**，直接选择证书链 PEM 和私钥 PEM，点「上传证书并生效」。爱快 SSH 没有完整 SFTP 子系统时也能用；文件会写入应用持久化目录。容器内默认读取：
+
+   ```
+   /data/certs/fullchain.pem
+   /data/certs/privkey.pem
+   ```
+
+   也可以通过爱快 Web 文件管理把文件放到应用数据目录的 `certs/` 子目录，但页面上传最省事。不要放到容器临时文件系统。
+
+**配置路径**：如果修改了默认路径，进入同一模块修改后保存；默认路径不用改。写入后会自动触发代理重新加载，无需重启容器。
+
+**自动同步（推荐，免手动上传）**：在同一模块勾选「启用证书自动同步」，二选一配置：
+
+- 一个 JSON 地址，由 gately 网关返回：
+
+  ```json
+  {
+    "cert_pem": "-----BEGIN CERTIFICATE-----\n...",
+    "key_pem": "-----BEGIN PRIVATE KEY-----\n..."
+  }
+  ```
+
+  也兼容 `cert` / `key`、`fullchain` / `private_key` 字段名。
+
+- 或两个独立 PEM 地址，分别返回证书链和私钥。
+
+可选填 Bearer Token，port-guard 会带 `Authorization: Bearer <token>` 拉取。默认每 3600 秒检查一次，可在 60–86400 秒内调整。拉取后先校验证书与私钥匹配，内容变化才原子写入并重载监听器；页面会显示最近成功时间、最近变更时间和错误信息。也可以点「立即拉取一次」验证。
+
+> 拉取私钥必须走内网 HTTPS 或可信链路，不要通过公网明文 HTTP 暴露私钥。
+
+3. **添加转发规则**：在 **转发代理** 添加规则，勾选「入口 HTTPS」：
+
+   ```
+   监听端口：22301
+   后端内网 IP：网关的 LAN IP
+   后端端口：443 或网关 HTTP 端口
+   ```
+
+   如果网关期望收到明文 HTTP，就不要勾选「后端 HTTPS」；如果网关期望收到 HTTPS，勾选「后端 HTTPS」，并把「后端 SNI / 域名」填成证书绑定的域名。
+
+4. **爱快端口映射**：域名 443 场景把 **TCP 443** 指向 `本应用IP:22301`。不要把 UDP 443 指到这个 TCP 监听口；UDP 443（QUIC）应直连原网关或关闭。
+
+5. **验证**：浏览器访问 `https://域名`，转发日志应出现该连接的记录；若证书路径或内容错误，日志动作会显示 `TLS握手失败`，同时容器日志会打印具体错误。
+
+> 当前是**单证书**终结：所有启用入口 HTTPS 的规则共用同一份证书。如果要按多个域名自动选择不同证书，需要后续增加 SNI 证书表。
+
 ## 配置项说明
 
 | 配置 | 默认值 | 说明 |
 |---|---|---|
 | `proxy_enabled` | false | 启用串联转发代理 |
 | `proxy_port_start` / `proxy_port_end` | 22300 / 22349 | 代理监听端口池（须在容器映射范围内） |
+| `api_token` | 空 | 脚本推送证书用的 Bearer Token，留空则禁用 Token 认证 |
+| `tls_cert_file` | `/data/certs/fullchain.pem` | 入口 HTTPS 终结使用的证书链 PEM 路径 |
+| `tls_key_file` | `/data/certs/privkey.pem` | 入口 HTTPS 终结使用的私钥 PEM 路径 |
+| `cert_sync_enabled` | false | 启用定时拉取证书 |
+| `cert_sync_url` | 空 | 证书 JSON 地址，返回 `cert_pem` / `key_pem` |
+| `cert_sync_cert_url` / `cert_sync_key_url` | 空 | 分别拉取证书链与私钥 PEM 的地址 |
+| `cert_sync_token` | 空 | 拉取时携带的 Bearer Token |
+| `cert_sync_interval_seconds` | 3600 | 拉取间隔，60–86400 秒 |
 | `ban_duration_minutes` | 30 | 封禁时长（分钟） |
 | `whitelist` | 私网段 | 逗号分隔的 CIDR，永不封禁 |
 | `ignore_private_ips` | true | 忽略 RFC1918 私网地址 |
@@ -97,8 +179,12 @@ GET    /api/events?limit=100&type=attack   事件日志
 GET    /api/bans            封禁列表
 GET    /api/config          当前配置
 POST   /api/config          更新配置（JSON）
+GET    /api/certs/status    证书状态与到期时间
+POST   /api/certs           上传证书 {"cert_pem":"-----BEGIN CERTIFICATE-----...","key_pem":"-----BEGIN PRIVATE KEY-----..."}
+POST   /api/certs/push      脚本推送证书（multipart: cert/key 文件，需 Bearer Token）
+POST   /api/certs/pull      立即按配置拉取一次证书
 GET    /api/forwards        转发规则列表
-POST   /api/forwards        添加转发规则 {"listen_port":22300,"backend_ip":"192.168.1.10","backend_port":22,"label":"NAS SSH"}
+POST   /api/forwards        添加转发规则 {"listen_port":22300,"backend_ip":"192.168.1.10","backend_port":22,"label":"NAS SSH"}；HTTPS 终结可加 "listen_tls":true，"backend_tls":true，"backend_sni":"nas.example.com"
 POST   /api/forwards/{id}/toggle   启停规则
 DELETE /api/forwards/{id}   删除规则
 GET    /api/forwards/logs?limit=1000   转发日志（内存，最多 1000 条）
@@ -113,7 +199,7 @@ GET    /health              健康检查
 - **Go 1.26+**，纯静态编译，无 CGO
 - **SQLite**：`modernc.org/sqlite`（纯 Go 驱动）
 - **Web**：标准库 `net/http` + `html/template`，模板与静态资源 `embed` 进二进制
-- **转发**：标准库 `net` 双向 TCP 转发，`SetNoDelay` + 半关闭
+- **转发**：标准库 `net` 双向 TCP 转发，`SetNoDelay` + 半关闭；可选 `crypto/tls` 入口终结与后端重加密
 - 静态二进制约 15MB，ipkg 包仅数 KB（只含 compose 与配置，镜像从 GHCR 拉取），Docker 镜像约 39MB，运行内存 15–30MB
 - 支持 `linux/amd64` 与 `linux/arm64`
 
@@ -150,6 +236,8 @@ make build   # 本地构建单个二进制
 - 代理为串行单点，本应用故障或重启时，切到代理的服务会短暂中断
 - bridge 网络下容器只能监听 compose 预先映射的端口，因此代理监听端口必须在 22300–22349 范围内；要突破需改 `docker-compose.yaml` 并重装
 - 后端服务看到的来源 IP 会变成容器 IP（代理是新发起的 TCP 连接）；后端访问日志不再反映真实公网 IP。若后端 Syslog 里的登录失败也记的是代理私网 IP，会被「忽略私网 IP」规则跳过，此场景请以代理层连接检测为准
+- HTTPS 终结当前共用一份证书，不支持同一监听端口按 SNI 自动选择多张证书
+- 启用「后端 HTTPS」时会重新发起 TLS 连接；如果后端是自签证书且不在系统信任链内，当前会校验证书失败，请优先让后端使用受信任证书或不要勾选后端 HTTPS
 
 ## License
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zxkbazinga/port-guard/internal/ban"
+	"github.com/zxkbazinga/port-guard/internal/certsync"
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
 	"github.com/zxkbazinga/port-guard/internal/proxy"
@@ -91,9 +92,17 @@ func main() {
 	}
 	manager.Start()
 
+	// 证书自动同步：从内网网关定时拉取 cert/key，变化后重载代理。
+	certSync := certsync.New(cfg, logger, func() {
+		if err := proxyServer.Reload(); err != nil {
+			logger.Warn("证书更新后重载代理失败", "err", err)
+		}
+	})
+	certSync.Start()
+
 	webServer, err := web.NewServer(web.Components{
 		Cfg: cfg, Store: s, Engine: engine, Syslog: syslogd, Proxy: proxyServer,
-		Bans: manager, Log: logger,
+		Bans: manager, CertSync: certSync, Log: logger,
 	})
 	if err != nil {
 		logger.Error("初始化 Web 服务失败", "err", err)
@@ -144,6 +153,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
+	certSync.Stop()
 	manager.Stop()
 	syslogd.Stop()
 	proxyServer.Stop()

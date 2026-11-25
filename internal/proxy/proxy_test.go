@@ -1,10 +1,19 @@
 package proxy
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -186,5 +195,94 @@ func TestDisabledForwardNotListened(t *testing.T) {
 	st := p.Stats()
 	if len(st["ports"].([]int)) != 0 {
 		t.Fatalf("停用的规则不应监听，实际 %v", st["ports"])
+	}
+}
+
+func writeTestCert(t *testing.T, dir string) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "port-guard-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		IsCA:         true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath := filepath.Join(dir, "fullchain.pem")
+	keyPath := filepath.Join(dir, "privkey.pem")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certPath, keyPath
+}
+
+func TestTLSListenerTermination(t *testing.T) {
+	cfg, s, eng, log := testSetup(t)
+	backendPort := freePort(t)
+	listenPort := freePort(t)
+
+	bl, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", backendPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bl.Close()
+	go func() {
+		for {
+			c, err := bl.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				buf := make([]byte, 128)
+				n, _ := c.Read(buf)
+				_, _ = c.Write(buf[:n])
+			}()
+		}
+	}()
+
+	certFile, keyFile := writeTestCert(t, t.TempDir())
+	_ = cfg.Update(map[string]any{"tls_cert_file": certFile, "tls_key_file": keyFile})
+	_ = s.UpsertForward(store.Forward{
+		ListenPort: listenPort, BackendIP: "127.0.0.1", BackendPort: backendPort,
+		Protocol: "tcp", Enabled: true, ListenTLS: true,
+	})
+	p := New(cfg, log, eng, s)
+	if err := p.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+
+	conn, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", listenPort), &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "hello-tls")
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 128)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "hello-tls" {
+		t.Fatalf("TLS 终结回声不符: %q", string(buf[:n]))
 	}
 }

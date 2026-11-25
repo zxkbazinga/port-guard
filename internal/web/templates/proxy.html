@@ -13,13 +13,15 @@
   <p class="desc">添加规则后，到爱快把对应服务的端口映射「内网目标」改成 <span class="mono">本应用IP : 监听端口</span>，外网端口保持不变，流量即经过代理。建议监听端口用 <span class="mono">{{.PortStart}}–{{.PortEnd}}</span> 范围内、且容器已映射的端口。</p>
 {{if .Forwards}}
 <table class="table">
-  <thead><tr><th>监听端口</th><th>后端地址</th><th>协议</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
+  <thead><tr><th>监听端口</th><th>后端地址</th><th>入口 HTTPS</th><th>后端 HTTPS</th><th>SNI</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
   <tbody>
   {{range .Forwards}}
     <tr>
       <td class="mono">{{.ListenPort}}</td>
       <td class="mono">{{.BackendIP}}:{{.BackendPort}}</td>
-      <td>{{.Protocol}}</td>
+      <td><span class="badge {{if .ListenTLS}}green{{else}}gray{{end}}">{{if .ListenTLS}}终结{{else}}透传{{end}}</span></td>
+      <td><span class="badge {{if .BackendTLS}}green{{else}}gray{{end}}">{{if .BackendTLS}}TLS{{else}}明文{{end}}</span></td>
+      <td class="mono">{{if .BackendSNI}}{{.BackendSNI}}{{else}}-{{end}}</td>
       <td>{{if .Label}}{{.Label}}{{else}}-{{end}}</td>
       <td><span class="badge {{if .Enabled}}green{{else}}gray{{end}}">{{if .Enabled}}启用{{else}}停用{{end}}</span></td>
       <td>
@@ -64,8 +66,12 @@
     <h2>添加转发规则</h2>
     <label>监听端口（爱快映射到此端口）<input id="fwdListen" type="number" min="1" max="65535" placeholder="2222"></label>
     <label>后端内网 IP<input id="fwdIP" placeholder="192.168.1.100"></label>
-    <label>后端端口<input id="fwdPort" type="number" min="1" max="65535" placeholder="22"></label>
-    <label>备注（可选）<input id="fwdLabel" placeholder="例如：群晖 SSH"></label>
+    <label>后端端口<input id="fwdPort" type="number" min="1" max="65535" placeholder="443"></label>
+    <label class="check"><input id="fwdListenTLS" type="checkbox"> 入口 HTTPS（用 port-guard 上的证书终结 TLS）</label>
+    <label class="check"><input id="fwdBackendTLS" type="checkbox"> 后端 HTTPS（重新发起 TLS 连接）</label>
+    <label>后端 SNI / 域名（可选）<input id="fwdBackendSNI" placeholder="例如：nas.example.com"></label>
+    <p class="hint">域名场景常见配置：爱快 TCP 443 → 本应用 22301；规则 22301 → 网关内网 443，勾选入口 HTTPS。若网关本身也要求 HTTPS，再勾选后端 HTTPS，并把 SNI 填成证书域名。</p>
+    <label>备注（可选）<input id="fwdLabel" placeholder="例如：NAS HTTPS"></label>
     <div class="modal-actions">
       <button class="btn" onclick="hideFwdModal()">取消</button>
       <button class="primary" onclick="submitFwd()">确认添加</button>
@@ -83,7 +89,10 @@ async function submitFwd(){
   const ip=document.getElementById('fwdIP').value.trim();
   if(!listen||listen<1||listen>65535){document.getElementById('fwdResult').textContent='请输入有效的监听端口';return}
   if(!port||port<1||port>65535){document.getElementById('fwdResult').textContent='请输入有效的后端端口';return}
-  const body={listen_port:listen,backend_ip:ip,backend_port:port,protocol:'tcp',label:document.getElementById('fwdLabel').value.trim()};
+  const body={listen_port:listen,backend_ip:ip,backend_port:port,protocol:'tcp',label:document.getElementById('fwdLabel').value.trim(),
+    listen_tls:document.getElementById('fwdListenTLS').checked,
+    backend_tls:document.getElementById('fwdBackendTLS').checked,
+    backend_sni:document.getElementById('fwdBackendSNI').value.trim()};
   const res=await fetch('/api/forwards',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const data=await res.json();
   if(res.ok){location.reload()}else{document.getElementById('fwdResult').textContent=data.error||'添加失败'}
