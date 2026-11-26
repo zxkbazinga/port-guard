@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/zxkbazinga/port-guard/internal/ban"
-	"github.com/zxkbazinga/port-guard/internal/certsync"
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
+	"github.com/zxkbazinga/port-guard/internal/notify"
 	"github.com/zxkbazinga/port-guard/internal/proxy"
 	"github.com/zxkbazinga/port-guard/internal/store"
 )
@@ -42,7 +42,7 @@ type Server struct {
 	syslog   *detector.SyslogReceiver
 	proxySrv *proxy.Server
 	bans     *ban.Manager
-	certSync *certsync.Manager
+	notifier *notify.Notifier
 	log      *slog.Logger
 	sessions *sessionStore
 	tmpl     *template.Template
@@ -56,7 +56,7 @@ type Components struct {
 	Syslog   *detector.SyslogReceiver
 	Proxy    *proxy.Server
 	Bans     *ban.Manager
-	CertSync *certsync.Manager
+	Notifier *notify.Notifier
 	Log      *slog.Logger
 }
 
@@ -90,7 +90,7 @@ func NewServer(c Components) (*Server, error) {
 	}
 	s := &Server{
 		cfg: c.Cfg, store: c.Store, engine: c.Engine, syslog: c.Syslog, proxySrv: c.Proxy,
-		bans: c.Bans, certSync: c.CertSync, log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
+		bans: c.Bans, notifier: c.Notifier, log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
 	}
 	s.routes()
 	return s, nil
@@ -127,7 +127,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/certs/status", s.withAuth(s.apiCertStatus))
 	s.mux.HandleFunc("POST /api/certs", s.withAuth(s.apiCertUpload))
 	s.mux.HandleFunc("POST /api/certs/push", s.withAuth(s.apiCertPush))
-	s.mux.HandleFunc("POST /api/certs/pull", s.withAuth(s.apiCertPull))
+	s.mux.HandleFunc("POST /api/notify/test", s.withAuth(s.apiNotifyTest))
 	s.mux.HandleFunc("GET /api/forwards", s.withAuth(s.apiForwards))
 	s.mux.HandleFunc("POST /api/forwards", s.withAuth(s.apiForwardAdd))
 	s.mux.HandleFunc("POST /api/forwards/{id}", s.withAuth(s.apiForwardUpdate))
@@ -246,7 +246,7 @@ func (s *Server) pushCommand() string {
 func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	updates := map[string]any{}
-	boolKeys := []string{"ignore_private_ips", "detection_enabled", "login_fail_enabled", "proxy_enabled", "cert_sync_enabled"}
+	boolKeys := []string{"ignore_private_ips", "detection_enabled", "login_fail_enabled", "proxy_enabled", "dingtalk_enabled"}
 	for _, k := range boolKeys {
 		updates[k] = r.FormValue(k) == "on" || r.FormValue(k) == "1"
 	}
@@ -254,13 +254,13 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 		"port_scan_threshold", "conn_rate_threshold", "short_conn_threshold",
 		"alert_cooldown_seconds", "event_retention_days", "web_session_hours",
 		"login_fail_threshold", "login_fail_window_seconds",
-		"proxy_port_start", "proxy_port_end", "cert_sync_interval_seconds"}
+		"proxy_port_start", "proxy_port_end"}
 	for _, k := range intKeys {
 		n, _ := strconv.Atoi(r.FormValue(k))
 		updates[k] = n
 	}
 	strKeys := []string{"whitelist", "geo_mode", "web_username", "api_token", "tls_cert_file", "tls_key_file",
-		"cert_sync_url", "cert_sync_cert_url", "cert_sync_key_url", "cert_sync_token"}
+		"dingtalk_webhook", "dingtalk_secret", "dingtalk_keyword"}
 	for _, k := range strKeys {
 		updates[k] = strings.TrimSpace(r.FormValue(k))
 	}
@@ -277,9 +277,6 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	syslogErr := s.reloadSyslogIfPortChanged(oldSyslogPort)
 	s.engine.Reset()
 	s.reloadProxy()
-	if s.certSync != nil {
-		go func() { _ = s.certSync.SyncNow() }()
-	}
 	s.render(w, "config.html", map[string]any{
 		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true),
 		"Saved": syslogErr == nil, "Error": errString(syslogErr),
@@ -418,9 +415,6 @@ func (s *Server) apiConfigSet(w http.ResponseWriter, r *http.Request) {
 	}
 	s.engine.Reset()
 	s.reloadProxy()
-	if s.certSync != nil {
-		go func() { _ = s.certSync.SyncNow() }()
-	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -470,22 +464,7 @@ func (s *Server) apiCertStatus(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 	}
-	if s.certSync != nil {
-		status["sync"] = s.certSync.Stats()
-	}
 	writeJSON(w, 200, status)
-}
-
-func (s *Server) apiCertPull(w http.ResponseWriter, r *http.Request) {
-	if s.certSync == nil {
-		writeJSON(w, 400, map[string]any{"error": "证书自动同步不可用"})
-		return
-	}
-	if err := s.certSync.SyncNow(); err != nil {
-		writeJSON(w, 500, map[string]any{"error": err.Error()})
-		return
-	}
-	s.apiCertStatus(w, r)
 }
 
 func (s *Server) apiCertUpload(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +497,23 @@ func (s *Server) apiCertPush(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("证书已通过推送接口更新并重载")
 	s.apiCertStatus(w, r)
+}
+
+// apiNotifyTest 同步发送一条测试消息，便于保存配置后立刻验证钉钉机器人可用性。
+func (s *Server) apiNotifyTest(w http.ResponseWriter, _ *http.Request) {
+	if !s.cfg.DingTalk().Enabled {
+		writeJSON(w, 400, map[string]any{"error": "请先启用并保存钉钉通知配置"})
+		return
+	}
+	if s.notifier == nil {
+		writeJSON(w, 500, map[string]any{"error": "通知器未初始化"})
+		return
+	}
+	if err := s.notifier.Test(); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func readCertForm(r *http.Request) (string, string, error) {

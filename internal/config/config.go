@@ -50,16 +50,14 @@ type values struct {
 	ProxyPortEnd   int  `json:"proxy_port_end"`
 	// GeoMode 限制转发连接的来源地区：off / cn / cn_all（仅转发端口生效，不影响管理界面）
 	GeoMode string `json:"geo_mode"`
-	// TLS 终结：证书与私钥文件（通过 SSH 放到 /data/certs/ 下即可）
+	// TLS 终结：证书与私钥文件（通过 Web 上传或 API 推送）
 	TLSCertFile string `json:"tls_cert_file"`
 	TLSKeyFile  string `json:"tls_key_file"`
-	// TLS 证书自动同步：定时从内网网关拉取证书与私钥
-	CertSyncEnabled         bool   `json:"cert_sync_enabled"`
-	CertSyncURL             string `json:"cert_sync_url"`
-	CertSyncCertURL         string `json:"cert_sync_cert_url"`
-	CertSyncKeyURL          string `json:"cert_sync_key_url"`
-	CertSyncToken           string `json:"cert_sync_token"`
-	CertSyncIntervalSeconds int    `json:"cert_sync_interval_seconds"`
+	// 钉钉群机器人通知：新封禁 IP 时推送消息
+	DingTalkEnabled bool   `json:"dingtalk_enabled"`
+	DingTalkWebhook string `json:"dingtalk_webhook"` // 含 access_token 的完整地址
+	DingTalkSecret  string `json:"dingtalk_secret"`  // 加签机器人的 SEC 密钥，留空表示未开启加签
+	DingTalkKeyword string `json:"dingtalk_keyword"` // 关键词校验机器人的关键词，会附在消息里
 }
 
 func defaults() values {
@@ -76,8 +74,6 @@ func defaults() values {
 		ProxyEnabled: false, ProxyPortStart: ProxyPortPhysicalMin, ProxyPortEnd: ProxyPortPhysicalMax,
 		GeoMode:     geoip.ModeCN,
 		TLSCertFile: "/data/certs/fullchain.pem", TLSKeyFile: "/data/certs/privkey.pem",
-		CertSyncEnabled: false, CertSyncURL: "", CertSyncCertURL: "", CertSyncKeyURL: "",
-		CertSyncToken: "", CertSyncIntervalSeconds: 3600,
 	}
 }
 
@@ -154,18 +150,14 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.TLSCertFile)
 	case "tls_key_file":
 		get(raw, &v.TLSKeyFile)
-	case "cert_sync_enabled":
-		get(raw, &v.CertSyncEnabled)
-	case "cert_sync_url":
-		get(raw, &v.CertSyncURL)
-	case "cert_sync_cert_url":
-		get(raw, &v.CertSyncCertURL)
-	case "cert_sync_key_url":
-		get(raw, &v.CertSyncKeyURL)
-	case "cert_sync_token":
-		get(raw, &v.CertSyncToken)
-	case "cert_sync_interval_seconds":
-		get(raw, &v.CertSyncIntervalSeconds)
+	case "dingtalk_enabled":
+		get(raw, &v.DingTalkEnabled)
+	case "dingtalk_webhook":
+		get(raw, &v.DingTalkWebhook)
+	case "dingtalk_secret":
+		get(raw, &v.DingTalkSecret)
+	case "dingtalk_keyword":
+		get(raw, &v.DingTalkKeyword)
 	}
 }
 
@@ -192,18 +184,16 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_ALERT_COOLDOWN":       "alert_cooldown_seconds",
 		"PG_EVENT_RETENTION_DAYS": "event_retention_days", "PG_WEB_SESSION_HOURS": "web_session_hours",
 		"PG_LOGIN_FAIL_THRESHOLD": "login_fail_threshold", "PG_LOGIN_FAIL_WINDOW": "login_fail_window_seconds",
-		"PG_PROXY_ENABLED":      "proxy_enabled",
-		"PG_PROXY_PORT_START":   "proxy_port_start",
-		"PG_PROXY_PORT_END":     "proxy_port_end",
-		"PG_GEO_MODE":           "geo_mode",
-		"PG_TLS_CERT_FILE":      "tls_cert_file",
-		"PG_TLS_KEY_FILE":       "tls_key_file",
-		"PG_CERT_SYNC_ENABLED":  "cert_sync_enabled",
-		"PG_CERT_SYNC_URL":      "cert_sync_url",
-		"PG_CERT_SYNC_CERT_URL": "cert_sync_cert_url",
-		"PG_CERT_SYNC_KEY_URL":  "cert_sync_key_url",
-		"PG_CERT_SYNC_TOKEN":    "cert_sync_token",
-		"PG_CERT_SYNC_INTERVAL": "cert_sync_interval_seconds",
+		"PG_PROXY_ENABLED":    "proxy_enabled",
+		"PG_PROXY_PORT_START": "proxy_port_start",
+		"PG_PROXY_PORT_END":   "proxy_port_end",
+		"PG_GEO_MODE":         "geo_mode",
+		"PG_TLS_CERT_FILE":    "tls_cert_file",
+		"PG_TLS_KEY_FILE":     "tls_key_file",
+		"PG_DINGTALK_ENABLED": "dingtalk_enabled",
+		"PG_DINGTALK_WEBHOOK": "dingtalk_webhook",
+		"PG_DINGTALK_SECRET":  "dingtalk_secret",
+		"PG_DINGTALK_KEYWORD": "dingtalk_keyword",
 	}
 	use := func(envName string) bool {
 		if v := os.Getenv(envName); v == "" {
@@ -217,16 +207,15 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		return !saved
 	}
 	envStr := map[string]*string{
-		"PG_WEB_USERNAME":       &c.c.WebUsername,
-		"PG_API_TOKEN":          &c.c.APIToken,
-		"PG_WHITELIST":          &c.c.Whitelist,
-		"PG_GEO_MODE":           &c.c.GeoMode,
-		"PG_TLS_CERT_FILE":      &c.c.TLSCertFile,
-		"PG_TLS_KEY_FILE":       &c.c.TLSKeyFile,
-		"PG_CERT_SYNC_URL":      &c.c.CertSyncURL,
-		"PG_CERT_SYNC_CERT_URL": &c.c.CertSyncCertURL,
-		"PG_CERT_SYNC_KEY_URL":  &c.c.CertSyncKeyURL,
-		"PG_CERT_SYNC_TOKEN":    &c.c.CertSyncToken,
+		"PG_WEB_USERNAME":     &c.c.WebUsername,
+		"PG_API_TOKEN":        &c.c.APIToken,
+		"PG_WHITELIST":        &c.c.Whitelist,
+		"PG_GEO_MODE":         &c.c.GeoMode,
+		"PG_TLS_CERT_FILE":    &c.c.TLSCertFile,
+		"PG_TLS_KEY_FILE":     &c.c.TLSKeyFile,
+		"PG_DINGTALK_WEBHOOK": &c.c.DingTalkWebhook,
+		"PG_DINGTALK_SECRET":  &c.c.DingTalkSecret,
+		"PG_DINGTALK_KEYWORD": &c.c.DingTalkKeyword,
 	}
 	for k, p := range envStr {
 		if use(k) {
@@ -247,7 +236,6 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_LOGIN_FAIL_WINDOW":    &c.c.LoginFailWindow,
 		"PG_PROXY_PORT_START":     &c.c.ProxyPortStart,
 		"PG_PROXY_PORT_END":       &c.c.ProxyPortEnd,
-		"PG_CERT_SYNC_INTERVAL":   &c.c.CertSyncIntervalSeconds,
 	}
 	for k, p := range envInt {
 		if use(k) {
@@ -261,7 +249,7 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_DETECTION_ENABLED":  &c.c.DetectionEnabled,
 		"PG_LOGIN_FAIL_ENABLED": &c.c.LoginFailEnabled,
 		"PG_PROXY_ENABLED":      &c.c.ProxyEnabled,
-		"PG_CERT_SYNC_ENABLED":  &c.c.CertSyncEnabled,
+		"PG_DINGTALK_ENABLED":   &c.c.DingTalkEnabled,
 	}
 	for k, p := range envBool {
 		if use(k) {
@@ -320,12 +308,6 @@ func (c *Config) normalize() {
 	if strings.TrimSpace(c.c.TLSKeyFile) == "" {
 		c.c.TLSKeyFile = d.TLSKeyFile
 	}
-	c.c.CertSyncURL = strings.TrimSpace(c.c.CertSyncURL)
-	c.c.CertSyncCertURL = strings.TrimSpace(c.c.CertSyncCertURL)
-	c.c.CertSyncKeyURL = strings.TrimSpace(c.c.CertSyncKeyURL)
-	if c.c.CertSyncIntervalSeconds < 60 || c.c.CertSyncIntervalSeconds > 86400 {
-		c.c.CertSyncIntervalSeconds = d.CertSyncIntervalSeconds
-	}
 }
 
 // Snapshot 返回配置快照（用于页面渲染与 API）。
@@ -336,11 +318,10 @@ func (c *Config) Snapshot(maskSecrets bool) map[string]any {
 	out := map[string]any{}
 	_ = json.Unmarshal(raw, &out)
 	if maskSecrets {
-		if out["cert_sync_token"] != "" {
-			out["cert_sync_token"] = "********"
-		}
-		if out["api_token"] != "" {
-			out["api_token"] = "********"
+		for _, key := range []string{"api_token", "dingtalk_webhook", "dingtalk_secret"} {
+			if out[key] != "" {
+				out[key] = "********"
+			}
 		}
 	}
 	return out
@@ -373,12 +354,21 @@ func (c *Config) TLSFiles() (string, string) {
 	return c.c.TLSCertFile, c.c.TLSKeyFile
 }
 
-// CertSyncSettings 返回证书自动同步配置。
-func (c *Config) CertSyncSettings() (enabled bool, url, certURL, keyURL, token string, interval int) {
+// DingTalkSettings 返回钉钉通知配置快照，发送时每次读取，保存后立即生效。
+type DingTalkSettings struct {
+	Enabled bool
+	Webhook string
+	Secret  string
+	Keyword string
+}
+
+func (c *Config) DingTalk() DingTalkSettings {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.c.CertSyncEnabled, c.c.CertSyncURL, c.c.CertSyncCertURL,
-		c.c.CertSyncKeyURL, c.c.CertSyncToken, c.c.CertSyncIntervalSeconds
+	return DingTalkSettings{
+		Enabled: c.c.DingTalkEnabled, Webhook: c.c.DingTalkWebhook,
+		Secret: c.c.DingTalkSecret, Keyword: c.c.DingTalkKeyword,
+	}
 }
 
 // ProxyPortRange 返回当前配置的代理监听端口池范围 [start, end]。
@@ -485,8 +475,9 @@ func (c *Config) Update(values map[string]any) error {
 		if _, ok := asMap[key]; !ok {
 			continue
 		}
-		// Web 页面显示的是掩码，原样提交时不能把真实 Token 覆盖成星号。
-		if key == "cert_sync_token" || key == "api_token" {
+		// Web 页面显示的是掩码，原样提交时不能把真实密钥覆盖成星号。
+		switch key {
+		case "api_token", "dingtalk_webhook", "dingtalk_secret":
 			if s, ok := value.(string); ok && s == "********" {
 				continue
 			}

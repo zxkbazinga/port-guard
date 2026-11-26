@@ -36,6 +36,35 @@ func TestCheckerAllows(t *testing.T) {
 	}
 }
 
+func TestCheckerCountry(t *testing.T) {
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		ip   string
+		want string
+	}{
+		{"223.5.5.5", "中国大陆"},
+		{"1.0.1.1", "中国大陆"},
+		{"8.8.8.8", "美国"},
+		{"1.1.1.1", "澳大利亚"},
+		{"66.228.62.150", "美国"}, // 截图里爆破 SSH 的来源
+		{"122.185.44.206", "印度"},
+		{"102.220.160.148", "尼日利亚"}, // RIR 注册地（实际使用地可能在别的国家）
+		{"125.227.240.43", "中国台湾"},
+		{"2400:3200::1", "中国大陆"},
+		{"192.168.1.10", "内网"},
+		{"127.0.0.1", "内网"},
+		{"not-an-ip", "未知"},
+	}
+	for _, tc := range cases {
+		if got := c.Country(tc.ip); got != tc.want {
+			t.Errorf("Country(%q) = %q, want %q", tc.ip, got, tc.want)
+		}
+	}
+}
+
 func TestNormalizeMode(t *testing.T) {
 	cases := map[string]string{
 		"cn":     ModeCN,

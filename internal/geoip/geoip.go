@@ -106,19 +106,24 @@ func bitAt(raw []byte, i int) int {
 	return int((raw[i/8] >> (7 - uint(i%8))) & 1)
 }
 
-// Checker 持有编译期加载的地区前缀树，可并发使用。
+// Checker 持有编译期加载的地区前缀树与国家归属索引，可并发使用。
 type Checker struct {
-	v4 *trie
-	v6 *trie
+	v4        *trie
+	v6        *trie
+	countries *countryIndex
 }
 
-// New 从内嵌的 APNIC 分配表构建前缀树。
+// New 从内嵌的 APNIC 分配表构建前缀树与国家归属索引。
 func New() (*Checker, error) {
 	raw, err := blocksFS.ReadFile("data/blocks.txt")
 	if err != nil {
 		return nil, err
 	}
-	c := &Checker{v4: newTrie(32), v6: newTrie(128)}
+	countries, err := newCountryIndex()
+	if err != nil {
+		return nil, err
+	}
+	c := &Checker{v4: newTrie(32), v6: newTrie(128), countries: countries}
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -147,6 +152,14 @@ func New() (*Checker, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// Country 返回 IP 的归属国家/地区中文名（私网返回「内网」，未知返回「未知」）。
+func (c *Checker) Country(ip string) string {
+	if c == nil || c.countries == nil {
+		return "未知"
+	}
+	return c.countries.lookup(ip)
 }
 
 // Allows 判断来源 IP 在该模式下是否允许连接。

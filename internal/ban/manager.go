@@ -11,6 +11,7 @@ import (
 
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
+	"github.com/zxkbazinga/port-guard/internal/notify"
 	"github.com/zxkbazinga/port-guard/internal/store"
 )
 
@@ -19,6 +20,7 @@ type Manager struct {
 	cfg    *config.Config
 	log    *slog.Logger
 	store  *store.Store
+	notify *notify.Notifier
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	banned atomic.Uint64
@@ -27,6 +29,9 @@ type Manager struct {
 func New(cfg *config.Config, log *slog.Logger, s *store.Store) *Manager {
 	return &Manager{cfg: cfg, log: log, store: s}
 }
+
+// SetNotifier 注入钉钉通知器；须在处理告警前调用。
+func (m *Manager) SetNotifier(n *notify.Notifier) { m.notify = n }
 
 func (m *Manager) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -59,6 +64,18 @@ func (m *Manager) HandleAlert(a detector.Alert) {
 		Action: "封禁 " + time.Duration(minutes).String() + " (本地代理)",
 	})
 	m.banned.Add(1)
+	m.sendNotice(a.IP, a.Reason, a.Rule, a.Port, a.Proto, minutes, "attack")
+}
+
+// sendNotice 只在封禁已落库后触发，通知失败不影响封禁本身。
+func (m *Manager) sendNotice(ip, reason, rule string, port int, proto string, minutes int, source string) {
+	if m.notify == nil {
+		return
+	}
+	m.notify.Ban(notify.BanInfo{
+		IP: ip, Reason: reason, Rule: rule, Port: port, Proto: proto,
+		Minutes: minutes, Source: source,
+	})
 }
 
 // ManualBan 手工封禁 IP。
@@ -77,8 +94,12 @@ func (m *Manager) ManualBan(ip string, minutes int, reason string) error {
 	}); err != nil {
 		return err
 	}
-	return m.store.AddEvent(store.Event{Type: "manual_ban", IP: ip, Reason: reason,
-		Action: "手工封禁 " + time.Duration(minutes).String()})
+	if err := m.store.AddEvent(store.Event{Type: "manual_ban", IP: ip, Reason: reason,
+		Action: "手工封禁 " + time.Duration(minutes).String()}); err != nil {
+		return err
+	}
+	m.sendNotice(ip, reason, "", 0, "", minutes, "manual")
+	return nil
 }
 
 // Unban 手工解封 IP。

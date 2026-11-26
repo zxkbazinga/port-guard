@@ -77,9 +77,6 @@ button{font-family:inherit}
 .cert-upload label{display:flex;flex-direction:column;gap:5px;font-size:13px;color:#374151}
 .cert-upload .section-actions,.cert-upload .hint{grid-column:1/-1}
 .cert-upload .hint{margin:0}
-.cert-sync{margin-top:18px;padding-top:14px;border-top:1px dashed var(--border)}
-.cert-sync h3{font-size:15px;margin:0 0 6px}
-.cert-sync .section-actions{margin-top:12px}
 .cert-push{margin-top:18px;padding-top:14px;border-top:1px dashed var(--border)}
 .cert-push h3{font-size:15px;margin:0 0 6px}
 .cert-push .section-actions{margin-top:12px;flex-wrap:wrap}

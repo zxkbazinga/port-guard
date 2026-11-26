@@ -49,10 +49,10 @@
   <p class="desc">保留最近 <strong>1000</strong> 条转发记录（内存日志，重启后清空），每 3 秒自动刷新，最新的在最上面。日志框带滚动条，可拖拽右下角调整高度；「复制全部日志」会把全部记录复制到剪贴板。</p>
   <div id="fwdLogBox" class="log-box">
     <table class="table log-table">
-      <thead><tr><th>时间</th><th>来源 IP</th><th>监听</th><th>后端</th><th>动作</th><th>耗时</th></tr></thead>
+      <thead><tr><th>时间</th><th>来源 IP</th><th>归属地</th><th>监听</th><th>后端</th><th>动作</th><th>耗时</th></tr></thead>
       <tbody id="fwdLogBody">
       {{range .Logs}}
-        <tr><td class="nowrap">{{.Time}}</td><td class="mono">{{.IP}}</td><td class="mono">{{.Listen}}</td>
+        <tr><td class="nowrap">{{.Time}}</td><td class="mono">{{.IP}}</td><td>{{.Country}}</td><td class="mono">{{.Listen}}</td>
         <td class="mono">{{.Backend}}</td><td>{{.Action}}</td><td>{{.Duration}}</td></tr>
       {{end}}
       </tbody>

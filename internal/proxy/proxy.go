@@ -35,6 +35,7 @@ type ConnRecord struct {
 	ID       uint64 `json:"id"`
 	Time     string `json:"time"`
 	IP       string `json:"ip"`
+	Country  string `json:"country"` // 来源 IP 归属地（离线 APNIC 数据判定）
 	Listen   int    `json:"listen"`
 	Backend  string `json:"backend"`
 	Action   string `json:"action"`
@@ -48,6 +49,9 @@ type Server struct {
 	eng   *detector.Engine
 	geo   *geoip.Checker
 	store *store.Store
+	// onGeoDeny 在地区拒绝时回调，由上层写封禁记录（封禁管理页可见）并加本地封禁。
+	// 须在 Reload/Start 前通过 SetGeoDenyHook 设置。
+	onGeoDeny func(ip string, port int)
 
 	mu        sync.Mutex
 	listeners map[int]net.Listener // listenPort -> listener
@@ -78,6 +82,19 @@ func New(cfg *config.Config, log *slog.Logger, eng *detector.Engine, s *store.St
 		recIdx: make(map[uint64]int), localBan: make(map[string]int64)}
 }
 
+// SetGeoDenyHook 设置地区拒绝时的封禁回调（须在 Reload 前调用）。
+func (p *Server) SetGeoDenyHook(fn func(ip string, port int)) {
+	p.onGeoDeny = fn
+}
+
+// Country 复用代理的地区索引查询 IP 归属地，供通知等模块使用。
+func (p *Server) Country(ip string) string {
+	if p.geo == nil {
+		return "未知"
+	}
+	return p.geo.Country(ip)
+}
+
 // Block 本地封禁 IP 指定分钟。由检测告警回调直接调用，不依赖爱快 API。
 // minutes <= 0 时使用全局封禁时长，与 ban.Manager 保持一致。
 func (p *Server) Block(ip string, minutes int) {
@@ -102,6 +119,34 @@ func (p *Server) Unblock(ip string) {
 	p.mu.Lock()
 	delete(p.localBan, ip)
 	p.mu.Unlock()
+}
+
+// RestoreBans 启动时把数据库中未过期的活跃封禁恢复到即时拦截表。
+// 不恢复的话容器重启后 DB 里仍有封禁记录，但代理内存为空，被封 IP 可以重新连入。
+// 合并语义：只延长到期时间，不缩短内存中已有的封禁，避免与刚发生、
+// 尚未落库的告警产生竞态。手工解封会同时写库并调用 Unblock，不会在下次恢复时回来。
+func (p *Server) RestoreBans() {
+	bans, err := p.store.ListBans(true)
+	if err != nil {
+		p.log.Warn("恢复本地封禁失败", "err", err)
+		return
+	}
+	now := time.Now().Unix()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	restored := 0
+	for _, b := range bans {
+		if b.ExpiresAt <= now {
+			continue
+		}
+		if cur, ok := p.localBan[b.IP]; !ok || b.ExpiresAt > cur {
+			p.localBan[b.IP] = b.ExpiresAt
+			restored++
+		}
+	}
+	if restored > 0 {
+		p.log.Info("已从数据库恢复本地封禁", "count", restored)
+	}
 }
 
 func (p *Server) isLocallyBanned(ip string) bool {
@@ -263,6 +308,11 @@ func (p *Server) handle(conn net.Conn, f store.Forward) {
 		p.blocked.Add(1)
 		p.record(start, srcIP, f, backend, "地区限制拒绝", time.Since(start))
 		p.log.Info("代理拦截非允许地区 IP", "ip", srcIP, "listen", f.ListenPort, "mode", p.cfg.GeoMode())
+		// 地区拒绝也拉黑：首次命中时写封禁记录（封禁管理页可见）+ 本地即时封禁。
+		// 已在本表则跳过，避免每个连接都查库/起协程；动作仍显示「地区限制拒绝」以保留原因。
+		if p.onGeoDeny != nil && !p.isLocallyBanned(srcIP) {
+			p.onGeoDeny(srcIP, f.ListenPort)
+		}
 		return
 	}
 
@@ -392,6 +442,7 @@ func (p *Server) record(start time.Time, ip string, f store.Forward, backend, ac
 		ID:       id,
 		Time:     start.Format("2006-01-02 15:04:05"),
 		IP:       ip,
+		Country:  p.geo.Country(ip),
 		Listen:   f.ListenPort,
 		Backend:  backend,
 		Action:   action,

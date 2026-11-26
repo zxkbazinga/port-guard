@@ -97,6 +97,9 @@ func TestGeoRestrictionRejectsForeignIP(t *testing.T) {
 	}
 	p := New(cfg, log, eng, s)
 
+	var hookIPs []string
+	p.SetGeoDenyHook(func(ip string, _ int) { hookIPs = append(hookIPs, ip) })
+
 	client, server := net.Pipe()
 	defer client.Close()
 	conn := &remoteAddrConn{Conn: server, remote: &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 55555}}
@@ -105,6 +108,42 @@ func TestGeoRestrictionRejectsForeignIP(t *testing.T) {
 	records := p.Records(5)
 	if len(records) == 0 || records[0].Action != "地区限制拒绝" {
 		t.Fatalf("期望境外 IP 被地区规则拦截，实际记录：%+v", records)
+	}
+	if records[0].Country != "美国" {
+		t.Fatalf("期望日志带归属地「美国」，实际 %q", records[0].Country)
+	}
+	// 地区拒绝应触发一次封禁回调；未注入回调的 IP 不应被误拉黑
+	if len(hookIPs) != 1 || hookIPs[0] != "8.8.8.8" {
+		t.Fatalf("期望触发一次地区封禁回调(8.8.8.8)，实际：%v", hookIPs)
+	}
+}
+
+// TestGeoDenyBlockHook 验证地区拒绝回调确实写入本地封禁表，
+// 且同一 IP 的后续连接不会重复触发回调（避免连接洪水下的重复查库/写库）。
+func TestGeoDenyBlockHook(t *testing.T) {
+	cfg, s, eng, log := testSetup(t)
+	if err := cfg.Update(map[string]any{"geo_mode": "cn"}); err != nil {
+		t.Fatal(err)
+	}
+	p := New(cfg, log, eng, s)
+	calls := 0
+	p.SetGeoDenyHook(func(ip string, _ int) {
+		calls++
+		p.Block(ip, 0)
+	})
+
+	f := store.Forward{ListenPort: 22300, BackendIP: "127.0.0.1", BackendPort: 1}
+	for i := 0; i < 5; i++ {
+		client, server := net.Pipe()
+		conn := &remoteAddrConn{Conn: server, remote: &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 55555}}
+		p.handle(conn, f)
+		client.Close()
+	}
+	if calls != 1 {
+		t.Fatalf("期望同一 IP 只触发一次封禁回调，实际 %d 次", calls)
+	}
+	if !p.isLocallyBanned("8.8.8.8") {
+		t.Fatal("地区拒绝回调后 IP 应进入本地封禁表")
 	}
 }
 

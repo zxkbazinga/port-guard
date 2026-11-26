@@ -3,7 +3,7 @@
   'use strict';
   var path = window.location.pathname;
   if (path === '/') setupDashboard();
-  if (path === '/config') { setupSectionSaves(); setupCertUpload(); }
+  if (path === '/config') { setupSectionSaves(); setupCertUpload(); setupNotifyTest(); }
   if (path === '/proxy') setupProxyLogs();
 
   function setupDashboard() {
@@ -43,11 +43,11 @@
         rows.forEach(function (r) {
           const tr = document.createElement('tr');
           // API 字段是 JSON tag 的小写形式
-          [r.time, r.ip, r.listen, r.backend, r.action, r.duration].forEach(function (v, i) {
+          [r.time, r.ip, r.country, r.listen, r.backend, r.action, r.duration].forEach(function (v, i) {
             const td = document.createElement('td');
             td.textContent = v == null ? '' : String(v);
             if (i === 0) td.className = 'nowrap';
-            if (i === 1 || i === 2 || i === 3) td.className = 'mono';
+            if (i === 1 || i === 3 || i === 4) td.className = 'mono';
             tr.appendChild(td);
           });
           body.appendChild(tr);
@@ -69,9 +69,9 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const rows = Array.isArray(data.records) ? data.records : [];
-      const lines = ['时间\t来源IP\t监听\t后端\t动作\t耗时'];
+      const lines = ['时间\t来源IP\t归属地\t监听\t后端\t动作\t耗时'];
       rows.forEach(function (r) {
-        lines.push([r.time, r.ip, r.listen, r.backend, r.action, r.duration]
+        lines.push([r.time, r.ip, r.country, r.listen, r.backend, r.action, r.duration]
           .map(function (v) { return v == null ? '' : String(v); }).join('\t'));
       });
       const text = lines.join('\n');
@@ -166,8 +166,6 @@
     const keyInput = document.getElementById('keyFileInput');
     const status = document.getElementById('certStatus');
     const result = document.getElementById('certUploadResult');
-    const pullBtn = document.getElementById('certPullBtn');
-    const pullResult = document.getElementById('certPullResult');
     const genTokenBtn = document.getElementById('genTokenBtn');
     const copyPushBtn = document.getElementById('copyPushBtn');
     const pushResult = document.getElementById('pushCopyResult');
@@ -252,31 +250,6 @@
       }
     });
 
-    if (pullBtn) {
-      pullBtn.addEventListener('click', async function () {
-        const original = pullBtn.textContent;
-        pullBtn.disabled = true;
-        pullBtn.textContent = '拉取中…';
-        try {
-          const res = await fetch('/api/certs/pull', { method: 'POST', credentials: 'same-origin' });
-          let data = null;
-          try { data = await res.json(); } catch (e) { /* 非 JSON 响应 */ }
-          if (!res.ok || !data) {
-            const msg = data && data.error ? data.error : ('HTTP ' + res.status);
-            showFeedback(pullResult, false, '拉取失败：' + msg);
-            return;
-          }
-          showFeedback(pullResult, true, '✓ 拉取完成');
-          applyStatus(data);
-        } catch (e) {
-          showFeedback(pullResult, false, '拉取失败：' + String(e));
-        } finally {
-          pullBtn.disabled = false;
-          pullBtn.textContent = original;
-        }
-      });
-    }
-
     async function refreshStatus() {
       try {
         const res = await fetch('/api/certs/status', { credentials: 'same-origin' });
@@ -300,22 +273,6 @@
         text = '尚未上传证书。当前读取路径：' + data.cert_path + ' / ' + data.key_path;
         status.style.color = '';
       }
-      if (data.sync) {
-        if (!data.sync.enabled) {
-          text += '；自动同步：未启用';
-        } else if (data.sync.last_success) {
-          text += '；自动同步：成功于 ' + new Date(data.sync.last_success * 1000).toLocaleString();
-          if (data.sync.last_changed) {
-            text += '，最近变更 ' + new Date(data.sync.last_changed * 1000).toLocaleString();
-          }
-        } else {
-          text += '；自动同步：已启用，尚未成功';
-        }
-        if (data.sync.last_error) {
-          text += '；错误：' + data.sync.last_error;
-          status.style.color = '#b91c1c';
-        }
-      }
       status.textContent = text;
     }
 
@@ -327,6 +284,38 @@
         reader.readAsText(file);
       });
     }
+  }
+
+  function setupNotifyTest() {
+    const btn = document.getElementById('notifyTestBtn');
+    const result = document.getElementById('notifyTestResult');
+    if (!btn || !result) return;
+    btn.addEventListener('click', async function () {
+      const panel = btn.closest('.panel');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '发送中…';
+      try {
+        // 先保存本面板，保证测试用的是刚填的 Webhook 和密钥
+        let res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(collectSection(panel))
+        });
+        let data = await res.json().catch(function () { return null; });
+        if (!res.ok || !data || !data.ok) throw new Error(data && data.error ? data.error : ('HTTP ' + res.status));
+        res = await fetch('/api/notify/test', { method: 'POST', credentials: 'same-origin' });
+        data = await res.json().catch(function () { return null; });
+        if (!res.ok || !data || !data.ok) throw new Error(data && data.error ? data.error : ('HTTP ' + res.status));
+        showFeedback(result, true, '✓ 测试消息已发送');
+      } catch (e) {
+        showFeedback(result, false, '测试失败：' + String(e));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
   }
 
   function showFeedback(el, ok, message) {

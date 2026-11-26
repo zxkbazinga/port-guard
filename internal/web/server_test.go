@@ -16,10 +16,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/zxkbazinga/port-guard/internal/config"
+	"github.com/zxkbazinga/port-guard/internal/notify"
 	"github.com/zxkbazinga/port-guard/internal/store"
 )
 
@@ -49,8 +51,8 @@ func TestTemplatesRender(t *testing.T) {
 		"tls_cert_file", "tls_key_file",
 		"certFileInput", "keyFileInput", "certUploadBtn", "certStatus",
 		"api_token", "genTokenBtn", "copyPushBtn", "pushCommand", "api/certs/push",
-		"cert_sync_enabled", "cert_sync_url", "cert_sync_interval_seconds",
-		"certPullBtn", "22349"} {
+		"dingtalk_enabled", "dingtalk_webhook", "dingtalk_secret", "dingtalk_keyword",
+		"notifyTestBtn", "发送测试消息", "22349"} {
 		if !strings.Contains(buf.String(), field) {
 			t.Fatalf("配置页缺少字段 %s", field)
 		}
@@ -221,6 +223,24 @@ func TestAPITokenAuth(t *testing.T) {
 	if cfg.APIToken() != "s3cr3t-token" {
 		t.Fatal("掩码值不应覆盖真实 Token")
 	}
+
+	if err := cfg.Update(map[string]any{
+		"dingtalk_webhook": "https://oapi.dingtalk.com/robot/send?access_token=abc",
+		"dingtalk_secret":  "SEC-real",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap = cfg.Snapshot(true)
+	if snap["dingtalk_webhook"] != "********" || snap["dingtalk_secret"] != "********" {
+		t.Fatalf("Snapshot 应掩码钉钉凭据，实际 %v / %v", snap["dingtalk_webhook"], snap["dingtalk_secret"])
+	}
+	if err := cfg.Update(map[string]any{"dingtalk_webhook": "********", "dingtalk_secret": "********"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.DingTalk(); got.Webhook != "https://oapi.dingtalk.com/robot/send?access_token=abc" ||
+		got.Secret != "SEC-real" {
+		t.Fatalf("掩码值不应覆盖真实钉钉凭据: %+v", got)
+	}
 }
 
 func TestCertPushMultipart(t *testing.T) {
@@ -258,6 +278,47 @@ func TestCertPushMultipart(t *testing.T) {
 	}
 	if !strings.Contains(gotCert, "BEGIN CERTIFICATE") || !strings.Contains(gotKey, "PRIVATE KEY") {
 		t.Fatal("文件字段解析失败")
+	}
+}
+
+func TestNotifyTestAPI(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "notify-test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cfg, err := config.New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	defer hook.Close()
+	if err := cfg.Update(map[string]any{"dingtalk_enabled": true, "dingtalk_webhook": hook.URL}); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := NewServer(Components{Cfg: cfg, Store: s, Notifier: notify.New(cfg, log), Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.apiNotifyTest(rec, httptest.NewRequest(http.MethodPost, "/api/notify/test", nil))
+	if rec.Code != http.StatusOK || calls.Load() != 1 {
+		t.Fatalf("测试发送应成功，code=%d calls=%d body=%s", rec.Code, calls.Load(), rec.Body.String())
+	}
+
+	if err := cfg.Update(map[string]any{"dingtalk_enabled": false}); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	srv.apiNotifyTest(rec, httptest.NewRequest(http.MethodPost, "/api/notify/test", nil))
+	if rec.Code != http.StatusBadRequest || calls.Load() != 1 {
+		t.Fatalf("关闭后不应发送，code=%d calls=%d", rec.Code, calls.Load())
 	}
 }
 

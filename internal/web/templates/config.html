@@ -23,6 +23,28 @@
 
 <section class="panel">
   <div class="section-head">
+    <h2>钉钉通知</h2>
+    <div class="section-actions">
+      <span class="save-feedback" hidden></span>
+      <button type="button" class="primary small section-save" data-label="钉钉通知">保存</button>
+    </div>
+  </div>
+  <p class="desc">有新 IP 被封禁时（自动检测、地区拒绝或手工封禁）向钉钉群机器人推送一条提醒。通知异步发送，网络异常不会拖慢封禁。</p>
+  <div class="form-grid">
+    <label class="check"><input type="checkbox" name="dingtalk_enabled" {{checked .Cfg.dingtalk_enabled}}> 启用钉钉封禁通知</label>
+    <label class="full">Webhook 地址<input name="dingtalk_webhook" value="{{.Cfg.dingtalk_webhook}}" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." autocomplete="off"></label>
+    <label>加签密钥 SEC（可选）<input name="dingtalk_secret" value="{{.Cfg.dingtalk_secret}}" placeholder="机器人安全设置中的加签密钥" autocomplete="off"></label>
+    <label>关键词（可选）<input name="dingtalk_keyword" value="{{.Cfg.dingtalk_keyword}}" placeholder="关键词安全设置中的任一关键词" autocomplete="off"></label>
+  </div>
+  <p class="hint">显示 <span class="mono">********</span> 表示已保存的值保持不变。钉钉机器人安全设置至少配一项：加签就填 SEC 密钥，关键词校验就填任一关键词（发送时自动加在消息开头），两者都填也可以。Webhook 地址含 access_token，请勿外传。</p>
+  <div class="section-actions">
+    <button type="button" id="notifyTestBtn" class="small">发送测试消息</button>
+    <span id="notifyTestResult" class="save-feedback"></span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="section-head">
     <h2>登录爆破防护</h2>
     <div class="section-actions">
       <span class="save-feedback" hidden></span>
@@ -102,22 +124,6 @@
     <p class="hint">命令已是单行，已自动填入当前 Token；只需把 <span class="mono">PORT_GUARD_IP</span> 换成能访问本应用的地址（Gately 在容器内就填容器可达的 IP）。修改 Token 后请点「保存」并刷新本页，命令会自动更新。私钥通过内网传输，请勿用公网明文 HTTP。</p>
   </div>
 
-  <div class="cert-sync">
-    <h3>自动从内网网关拉取</h3>
-    <p class="desc">启用后定时从 gately 网关拉取证书，校验匹配后自动写入并重载监听器。支持返回一个 JSON（字段 <span class="mono">cert_pem</span> / <span class="mono">key_pem</span>），或分别返回两份 PEM。私钥请求必须走内网 HTTPS，不要走公网明文 HTTP。</p>
-    <div class="form-grid">
-      <label class="check"><input type="checkbox" name="cert_sync_enabled" {{checked .Cfg.cert_sync_enabled}}> 启用证书自动同步</label>
-      <label>同步间隔（秒）<input type="number" name="cert_sync_interval_seconds" value="{{.Cfg.cert_sync_interval_seconds}}" min="60" max="86400"></label>
-      <label class="full">证书 JSON 地址<input name="cert_sync_url" value="{{.Cfg.cert_sync_url}}" placeholder="https://gately.local/api/port-guard/cert"></label>
-      <label>证书链 PEM 地址（与 JSON 二选一）<input name="cert_sync_cert_url" value="{{.Cfg.cert_sync_cert_url}}" placeholder="https://gately.local/certs/fullchain.pem"></label>
-      <label>私钥 PEM 地址（与 JSON 二选一）<input name="cert_sync_key_url" value="{{.Cfg.cert_sync_key_url}}" placeholder="https://gately.local/certs/privkey.pem"></label>
-      <label class="full">Bearer Token（留空清除；显示 ******** 表示保持不变）<input type="password" name="cert_sync_token" value="{{.Cfg.cert_sync_token}}" autocomplete="new-password"></label>
-    </div>
-    <div class="section-actions">
-      <button type="button" id="certPullBtn" class="small">立即拉取一次</button>
-      <span id="certPullResult" class="save-feedback"></span>
-    </div>
-  </div>
 </section>
 
 <section class="panel">

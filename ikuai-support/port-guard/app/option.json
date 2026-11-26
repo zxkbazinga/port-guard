@@ -261,10 +261,21 @@
     "default": "/data/certs/privkey.pem"
   },
   {
-    "attrname": "PG_CERT_SYNC_ENABLED",
+    "attrname": "PG_API_TOKEN",
     "label": {
-      "en": "Enable automatic TLS certificate sync (1/0)",
-      "zh": "启用证书自动同步（1/0）"
+      "en": "API token for script cert push (set in Web recommended)",
+      "zh": "脚本推送证书用 API Token（建议在 Web 中设置）"
+    },
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": ""
+  },
+  {
+    "attrname": "PG_DINGTALK_ENABLED",
+    "label": {
+      "en": "Send DingTalk notification on new bans (1/0, set in Web recommended)",
+      "zh": "新封禁 IP 时发送钉钉通知（1/0，建议在 Web 中设置）"
     },
     "type": "integer",
     "scope": "environment",
@@ -274,10 +285,10 @@
     "max": 1
   },
   {
-    "attrname": "PG_CERT_SYNC_URL",
+    "attrname": "PG_DINGTALK_WEBHOOK",
     "label": {
-      "en": "Certificate JSON URL",
-      "zh": "证书 JSON 拉取地址"
+      "en": "DingTalk robot webhook URL (set in Web recommended)",
+      "zh": "钉钉机器人 Webhook 地址（建议在 Web 中设置）"
     },
     "type": "string",
     "scope": "environment",
@@ -285,10 +296,10 @@
     "default": ""
   },
   {
-    "attrname": "PG_CERT_SYNC_CERT_URL",
+    "attrname": "PG_DINGTALK_SECRET",
     "label": {
-      "en": "Certificate chain PEM URL",
-      "zh": "证书链 PEM 拉取地址"
+      "en": "DingTalk robot signing secret (SEC)",
+      "zh": "钉钉机器人加签密钥（SEC）"
     },
     "type": "string",
     "scope": "environment",
@@ -296,45 +307,10 @@
     "default": ""
   },
   {
-    "attrname": "PG_CERT_SYNC_KEY_URL",
+    "attrname": "PG_DINGTALK_KEYWORD",
     "label": {
-      "en": "Private key PEM URL",
-      "zh": "私钥 PEM 拉取地址"
-    },
-    "type": "string",
-    "scope": "environment",
-    "required": false,
-    "default": ""
-  },
-  {
-    "attrname": "PG_CERT_SYNC_TOKEN",
-    "label": {
-      "en": "Bearer token for certificate sync",
-      "zh": "证书同步 Bearer Token"
-    },
-    "type": "string",
-    "scope": "environment",
-    "required": false,
-    "default": ""
-  },
-  {
-    "attrname": "PG_CERT_SYNC_INTERVAL",
-    "label": {
-      "en": "Certificate sync interval in seconds",
-      "zh": "证书同步间隔（秒）"
-    },
-    "type": "integer",
-    "scope": "environment",
-    "required": false,
-    "default": 3600,
-    "min": 60,
-    "max": 86400
-  },
-  {
-    "attrname": "PG_API_TOKEN",
-    "label": {
-      "en": "API token for script cert push (set in Web recommended)",
-      "zh": "脚本推送证书用 API Token（建议在 Web 中设置）"
+      "en": "DingTalk robot security keyword",
+      "zh": "钉钉机器人安全关键词"
     },
     "type": "string",
     "scope": "environment",

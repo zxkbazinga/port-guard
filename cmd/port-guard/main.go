@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/zxkbazinga/port-guard/internal/ban"
-	"github.com/zxkbazinga/port-guard/internal/certsync"
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
+	"github.com/zxkbazinga/port-guard/internal/notify"
 	"github.com/zxkbazinga/port-guard/internal/proxy"
 	"github.com/zxkbazinga/port-guard/internal/store"
 	"github.com/zxkbazinga/port-guard/internal/version"
@@ -70,6 +70,9 @@ func main() {
 	}
 
 	manager := ban.New(cfg, logger, s)
+	// 钉钉通知：新封禁写入成功后异步推送，配置从 Web 保存即时生效。
+	notifier := notify.New(cfg, logger)
+	manager.SetNotifier(notifier)
 
 	// 检测引擎：告警回调 → 代理本地封禁（accept 阶段即时生效）+ 封禁记录
 	var proxyServer *proxy.Server
@@ -80,6 +83,18 @@ func main() {
 		go manager.HandleAlert(a)
 	})
 	proxyServer = proxy.New(cfg, logger, engine, s)
+	notifier.SetCountryLookup(proxyServer.Country)
+
+	// 地区拒绝也拉黑：与检测告警走同一条封禁链路（本地即时 + DB 记录，
+	// 封禁管理页可见），但不喂检测引擎，避免污染连接频率等统计。
+	proxyServer.SetGeoDenyHook(func(ip string, port int) {
+		proxyServer.Block(ip, 0)
+		go manager.HandleAlert(detector.Alert{
+			IP: ip, Port: port, Proto: "tcp",
+			Rule: "geo_block", Reason: "地区限制拒绝",
+			Detail: "来源地区不在允许范围",
+		})
+	})
 
 	syslogd := detector.NewSyslogReceiver(cfg, logger, engine)
 
@@ -87,22 +102,18 @@ func main() {
 	if err := syslogd.Start(); err != nil {
 		logger.Warn("Syslog 接收不可用", "err", err)
 	}
+	// 先恢复数据库中的未到期封禁，再启动监听：重启后新连接立即被拒绝，
+	// 不必等该 IP 再次触发检测规则。
+	proxyServer.RestoreBans()
 	if err := proxyServer.Reload(); err != nil {
 		logger.Warn("代理转发启动失败", "err", err)
 	}
 	manager.Start()
-
-	// 证书自动同步：从内网网关定时拉取 cert/key，变化后重载代理。
-	certSync := certsync.New(cfg, logger, func() {
-		if err := proxyServer.Reload(); err != nil {
-			logger.Warn("证书更新后重载代理失败", "err", err)
-		}
-	})
-	certSync.Start()
+	notifier.Start()
 
 	webServer, err := web.NewServer(web.Components{
 		Cfg: cfg, Store: s, Engine: engine, Syslog: syslogd, Proxy: proxyServer,
-		Bans: manager, CertSync: certSync, Log: logger,
+		Bans: manager, Notifier: notifier, Log: logger,
 	})
 	if err != nil {
 		logger.Error("初始化 Web 服务失败", "err", err)
@@ -153,8 +164,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
-	certSync.Stop()
 	manager.Stop()
+	notifier.Stop()
 	syslogd.Stop()
 	proxyServer.Stop()
 	logger.Info("Port Guard 已退出")
