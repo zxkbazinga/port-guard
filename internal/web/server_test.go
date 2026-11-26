@@ -23,7 +23,6 @@ import (
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/notify"
 	"github.com/zxkbazinga/port-guard/internal/store"
-	"github.com/zxkbazinga/port-guard/internal/update"
 )
 
 func TestTemplatesRender(t *testing.T) {
@@ -75,7 +74,7 @@ func TestTemplatesRender(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{"转发代理", "Syslog", "最近事件", "检查更新", "checkUpdateBtn", "v1.0.0"} {
+	for _, s := range []string{"转发代理", "Syslog", "最近事件"} {
 		if !strings.Contains(buf.String(), s) {
 			t.Fatalf("概览页缺少 %q", s)
 		}
@@ -348,61 +347,4 @@ func newTestCertPair(t *testing.T) (string, string) {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
 		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
-}
-
-func TestApiUpdateCheck(t *testing.T) {
-	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9","html_url":"https://example.com/r","published_at":"2026-02-02T00:00:00Z","body":"发布说明","draft":false,"prerelease":false}`))
-	}))
-	defer hook.Close()
-	s, err := store.Open(filepath.Join(t.TempDir(), "web.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	cfg, err := config.New(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv, err := NewServer(Components{Cfg: cfg, Store: s, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv.updater = update.NewWithURL(hook.URL)
-
-	rec := httptest.NewRecorder()
-	srv.apiUpdateCheck(rec, httptest.NewRequest(http.MethodGet, "/api/update/check", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "9.9.9") {
-		t.Fatalf("检查更新应返回最新版本，code=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "release_url") {
-		t.Fatal("响应缺少 Release 链接")
-	}
-}
-
-func TestApiUpdateCheckFailure(t *testing.T) {
-	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer hook.Close()
-	s, err := store.Open(filepath.Join(t.TempDir(), "web.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	cfg, err := config.New(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv, err := NewServer(Components{Cfg: cfg, Store: s, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv.updater = update.NewWithURL(hook.URL)
-
-	rec := httptest.NewRecorder()
-	srv.apiUpdateCheck(rec, httptest.NewRequest(http.MethodGet, "/api/update/check", nil))
-	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "error") {
-		t.Fatalf("上游失败应返回 502，code=%d body=%s", rec.Code, rec.Body.String())
-	}
 }

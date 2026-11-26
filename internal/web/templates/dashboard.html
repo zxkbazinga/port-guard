@@ -2,13 +2,8 @@
 {{with .}}
 <div class="page-head">
   <h1>概览</h1>
-  <div class="head-actions">
-    <span class="badge {{if .Enabled}}green{{else}}gray{{end}}">{{if .Enabled}}防护运行中{{else}}防护已暂停{{end}}</span>
-    <span class="version-tag">v{{.Version}}</span>
-    <button type="button" id="checkUpdateBtn" class="btn small">检查更新</button>
-  </div>
+  <span class="badge {{if .Enabled}}green{{else}}gray{{end}}">{{if .Enabled}}防护运行中{{else}}防护已暂停{{end}}</span>
 </div>
-<div id="updateResult" class="update-result" hidden></div>
 
 <div class="cards">
   <div class="card"><div class="label">24 小时攻击告警</div><div class="value">{{.Attacks24h}}</div><div class="foot">次自动封禁</div></div>

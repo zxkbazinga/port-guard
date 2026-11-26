@@ -62,26 +62,32 @@
 
 <div id="fwdModal" class="modal" style="display:none">
   <div class="modal-card">
-    <h2 id="fwdModalTitle">添加转发规则</h2>
-    <label>监听端口（爱快映射到此端口）<input id="fwdListen" type="number" min="1" max="65535" placeholder="2222"></label>
-    <label>后端内网 IP<input id="fwdIP" placeholder="192.168.1.100"></label>
-    <label>后端端口<input id="fwdPort" type="number" min="1" max="65535" placeholder="443"></label>
-    <label>服务类型
-      <select id="fwdKind" onchange="applyFwdKind()">
-        <option value="tcp">普通服务（MySQL / RDP / SSH / HTTP）—— 原样透传</option>
-        <option value="https">HTTPS 网站 —— 由 port-guard 的证书加密</option>
-      </select>
-    </label>
-    <p id="fwdKindHelp" class="hint"></p>
-    <div id="fwdTlsOptions" style="display:none">
-      <label class="check"><input id="fwdBackendTLS" type="checkbox"> 忽略 SSL 证书（内网 HTTPS 用自签证书时勾选）</label>
+    <div class="modal-head">
+      <span class="modal-icon">＋</span>
+      <h2 id="fwdModalTitle">添加转发规则</h2>
+      <button type="button" class="modal-close" onclick="hideFwdModal()" title="关闭">×</button>
     </div>
-    <label>备注（可选）<input id="fwdLabel" placeholder="例如：NAS HTTPS"></label>
-    <div class="modal-actions">
+    <div class="modal-body">
+      <label>监听端口（爱快映射到此端口）<input id="fwdListen" type="number" min="1" max="65535" placeholder="2222"></label>
+      <label>后端内网 IP<input id="fwdIP" placeholder="192.168.1.100"></label>
+      <label>后端端口<input id="fwdPort" type="number" min="1" max="65535" placeholder="443"></label>
+      <label>服务类型
+        <select id="fwdKind" onchange="applyFwdKind()">
+          <option value="tcp">普通服务（MySQL / RDP / SSH / HTTP）—— 原样透传</option>
+          <option value="https">HTTPS 网站 —— 由 port-guard 的证书加密</option>
+        </select>
+      </label>
+      <p id="fwdKindHelp" class="hint"></p>
+      <div id="fwdTlsOptions" style="display:none">
+        <label class="check"><input id="fwdBackendTLS" type="checkbox"> 忽略 SSL 证书（内网 HTTPS 用自签证书时勾选）</label>
+      </div>
+      <label>备注（可选）<input id="fwdLabel" placeholder="例如：NAS HTTPS"></label>
+    </div>
+    <div class="modal-foot">
+      <p id="fwdResult" class="hint"></p>
       <button class="btn" onclick="hideFwdModal()">取消</button>
       <button class="primary" id="fwdSubmitBtn" onclick="submitFwd()">确认添加</button>
     </div>
-    <p id="fwdResult" class="hint"></p>
   </div>
 </div>
 

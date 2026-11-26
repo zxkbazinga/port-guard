@@ -33,8 +33,8 @@
   <div class="form-grid">
     <label class="check"><input type="checkbox" name="dingtalk_enabled" {{checked .Cfg.dingtalk_enabled}}> 启用钉钉封禁通知</label>
     <label class="full">Webhook 地址<input name="dingtalk_webhook" value="{{.Cfg.dingtalk_webhook}}" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." autocomplete="off"></label>
-    <label>加签密钥 SEC（可选）<input name="dingtalk_secret" value="{{.Cfg.dingtalk_secret}}" placeholder="机器人安全设置中的加签密钥" autocomplete="off"></label>
-    <label>关键词（可选）<input name="dingtalk_keyword" value="{{.Cfg.dingtalk_keyword}}" placeholder="关键词安全设置中的任一关键词" autocomplete="off"></label>
+    <label class="full">加签密钥 SEC（可选）<input name="dingtalk_secret" value="{{.Cfg.dingtalk_secret}}" placeholder="机器人安全设置中的加签密钥" autocomplete="off"></label>
+    <label class="full">关键词（可选）<input name="dingtalk_keyword" value="{{.Cfg.dingtalk_keyword}}" placeholder="关键词安全设置中的任一关键词" autocomplete="off"></label>
   </div>
   <p class="hint">显示 <span class="mono">********</span> 表示已保存的值保持不变。钉钉机器人安全设置至少配一项：加签就填 SEC 密钥，关键词校验就填任一关键词（发送时自动加在消息开头），两者都填也可以。Webhook 地址含 access_token，请勿外传。</p>
   <div class="section-actions">

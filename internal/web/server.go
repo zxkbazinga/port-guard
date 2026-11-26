@@ -2,7 +2,6 @@
 package web
 
 import (
-	"context"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -27,8 +26,6 @@ import (
 	"github.com/zxkbazinga/port-guard/internal/notify"
 	"github.com/zxkbazinga/port-guard/internal/proxy"
 	"github.com/zxkbazinga/port-guard/internal/store"
-	"github.com/zxkbazinga/port-guard/internal/update"
-	"github.com/zxkbazinga/port-guard/internal/version"
 )
 
 //go:embed templates/*.html
@@ -46,7 +43,6 @@ type Server struct {
 	proxySrv *proxy.Server
 	bans     *ban.Manager
 	notifier *notify.Notifier
-	updater  *update.Checker
 	log      *slog.Logger
 	sessions *sessionStore
 	tmpl     *template.Template
@@ -94,7 +90,7 @@ func NewServer(c Components) (*Server, error) {
 	}
 	s := &Server{
 		cfg: c.Cfg, store: c.Store, engine: c.Engine, syslog: c.Syslog, proxySrv: c.Proxy,
-		bans: c.Bans, notifier: c.Notifier, updater: update.New(), log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
+		bans: c.Bans, notifier: c.Notifier, log: c.Log, sessions: newSessionStore(), tmpl: tmpl, mux: http.NewServeMux(),
 	}
 	s.routes()
 	return s, nil
@@ -132,7 +128,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/certs", s.withAuth(s.apiCertUpload))
 	s.mux.HandleFunc("POST /api/certs/push", s.withAuth(s.apiCertPush))
 	s.mux.HandleFunc("POST /api/notify/test", s.withAuth(s.apiNotifyTest))
-	s.mux.HandleFunc("GET /api/update/check", s.withAuth(s.apiUpdateCheck))
 	s.mux.HandleFunc("GET /api/forwards", s.withAuth(s.apiForwards))
 	s.mux.HandleFunc("POST /api/forwards", s.withAuth(s.apiForwardAdd))
 	s.mux.HandleFunc("POST /api/forwards/{id}", s.withAuth(s.apiForwardUpdate))
@@ -227,7 +222,7 @@ func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
 		"Bans": bans, "Events": events,
 		"Syslog": s.syslog.Stats(), "Proxy": s.proxyStats(),
 		"BanStats": s.bans.Stats(), "Engine": s.engine.Stats(),
-		"Enabled": s.cfg.DetectionEnabled(), "Version": strings.TrimPrefix(version.Version, "v"),
+		"Enabled": s.cfg.DetectionEnabled(),
 	})
 }
 
@@ -524,18 +519,6 @@ func (s *Server) apiNotifyTest(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
-// apiUpdateCheck 手动检查 GitHub 最新版本；仅在用户点击时触发。
-func (s *Server) apiUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	result, err := s.updater.Check(ctx, version.Version)
-	if err != nil {
-		writeJSON(w, 502, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "update": result})
 }
 
 func readCertForm(r *http.Request) (string, string, error) {
