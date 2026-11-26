@@ -38,7 +38,7 @@
   </div>
   <p class="hint">显示 <span class="mono">********</span> 表示已保存的值保持不变。钉钉机器人安全设置至少配一项：加签就填 SEC 密钥，关键词校验就填任一关键词（发送时自动加在消息开头），两者都填也可以。Webhook 地址含 access_token，请勿外传。</p>
   <div class="section-actions">
-    <button type="button" id="notifyTestBtn" class="small">发送测试消息</button>
+    <button type="button" id="notifyTestBtn" class="btn small">发送测试消息</button>
     <span id="notifyTestResult" class="save-feedback"></span>
   </div>
 </section>
@@ -111,17 +111,17 @@
     <h3>自动推送（推荐 · 配合 Gately 自动部署）</h3>
     <p class="desc">在 Gately 证书自动部署的「复制后执行」里填入下方命令。证书签发/续期后 Gately 会自动把 <span class="mono">$certFile</span> / <span class="mono">$keyFile</span> 两个文件推到本应用，校验匹配后自动重载，无需 SSH/SFTP、无需登录。</p>
     <div class="form-grid">
-      <label class="full">API Token（脚本专用，留空则禁用推送；显示 <span class="mono">********</span> 表示保持不变）<input type="password" name="api_token" value="{{.Cfg.api_token}}" autocomplete="new-password" placeholder="点右侧按钮生成，或自定义一串随机字符串"></label>
+      <label class="full">API Token（显示 <span class="mono">********</span> 表示保持不变）<input type="password" name="api_token" value="{{.Cfg.api_token}}" autocomplete="new-password" placeholder="点下方按钮生成，或自定义一串随机字符串"></label>
     </div>
     <div class="section-actions">
-      <button type="button" id="genTokenBtn" class="small">生成随机 Token</button>
-      <button type="button" id="copyPushBtn" class="small">复制推送命令</button>
+      <button type="button" id="genTokenBtn" class="btn small">生成随机 Token</button>
+      <button type="button" id="copyPushBtn" class="btn small">复制推送命令</button>
       <span id="pushCopyResult" class="save-feedback"></span>
     </div>
     <label class="full push-cmd">填入 Gately「复制后执行」的命令（已内嵌真实 Token，单行）
       <textarea id="pushCommand" rows="3" readonly spellcheck="false">{{.PushCommand}}</textarea>
     </label>
-    <p class="hint">命令已是单行，已自动填入当前 Token；只需把 <span class="mono">PORT_GUARD_IP</span> 换成能访问本应用的地址（Gately 在容器内就填容器可达的 IP）。修改 Token 后请点「保存」并刷新本页，命令会自动更新。私钥通过内网传输，请勿用公网明文 HTTP。</p>
+    <p class="hint">API Token 供脚本推送证书使用，留空则禁用推送。命令已是单行，已自动填入当前 Token；只需把 <span class="mono">PORT_GUARD_IP</span> 换成能访问本应用的地址（Gately 在容器内就填容器可达的 IP）。修改 Token 后请点「保存」并刷新本页，命令会自动更新。私钥通过内网传输，请勿用公网明文 HTTP。</p>
   </div>
 
 </section>

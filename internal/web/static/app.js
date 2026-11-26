@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var path = window.location.pathname;
-  if (path === '/') setupDashboard();
+  if (path === '/') { setupDashboard(); setupUpdateCheck(); }
   if (path === '/config') { setupSectionSaves(); setupCertUpload(); setupNotifyTest(); }
   if (path === '/proxy') setupProxyLogs();
 
@@ -23,22 +23,87 @@
     }, 15000);
   }
 
+  function setupUpdateCheck() {
+    const btn = document.getElementById('checkUpdateBtn');
+    const box = document.getElementById('updateResult');
+    if (!btn || !box) return;
+    btn.addEventListener('click', async function () {
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '检查中…';
+      box.hidden = false;
+      box.className = 'update-result';
+      box.textContent = '正在连接 GitHub 检查最新版本…';
+      try {
+        const res = await fetch('/api/update/check', { credentials: 'same-origin' });
+        const data = await res.json().catch(function () { return null; });
+        if (!res.ok || !data || !data.ok) throw new Error(data && data.error ? data.error : ('HTTP ' + res.status));
+        const u = data.update;
+        const latest = String(u.latest || '').replace(/^v/, '');
+        const current = String(u.current || '').replace(/^v/, '');
+        box.className = 'update-result ' + (u.up_to_date ? 'ok' : 'new');
+        box.replaceChildren();
+        const head = document.createElement('div');
+        head.className = 'update-head';
+        head.textContent = u.up_to_date
+          ? '✓ 已是最新版本（v' + current + '）'
+          : '发现新版本：v' + current + ' → v' + latest;
+        box.appendChild(head);
+        if (u.release_url) {
+          const link = document.createElement('a');
+          link.className = 'link';
+          link.href = u.release_url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = '查看 Release 与下载 →';
+          box.appendChild(link);
+        }
+        if (u.notes) {
+          const notes = document.createElement('pre');
+          notes.className = 'update-notes';
+          notes.textContent = u.notes;
+          box.appendChild(notes);
+        }
+      } catch (e) {
+        box.className = 'update-result err';
+        box.textContent = '检查失败：' + String(e) + '（不影响系统运行，可稍后重试）';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  }
+
   function setupProxyLogs() {
     var body = document.getElementById('fwdLogBody');
+    var box = document.getElementById('fwdLogBox');
     if (!body) return;
-    var pause = document.getElementById('fwdLogPause');
-    var paused = false;
-    if (pause) {
-      pause.addEventListener('change', function () { paused = pause.checked; });
+    var autoScroll = document.getElementById('fwdLogAutoScroll');
+    // 用户往上翻看历史时暂停跟随，滚回底部后自动恢复
+    var following = true;
+    if (box) {
+      box.addEventListener('scroll', function () {
+        var gap = box.scrollHeight - box.scrollTop - box.clientHeight;
+        following = gap < 24;
+      });
+    }
+    function scrollToLatest() {
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+    if (autoScroll) {
+      autoScroll.addEventListener('change', function () {
+        if (autoScroll.checked) { following = true; scrollToLatest(); }
+      });
+      scrollToLatest();
     }
     async function refresh() {
-      if (paused) return;
       try {
         const res = await fetch('/api/forwards/logs?limit=1000', { credentials: 'same-origin' });
         if (!res.ok) return;
         const data = await res.json();
         const rows = Array.isArray(data.records) ? data.records : [];
         if (!body) return;
+        var prevCount = body.childElementCount;
         body.replaceChildren();
         rows.forEach(function (r) {
           const tr = document.createElement('tr');
@@ -56,6 +121,8 @@
         if (counter) {
           counter.textContent = rows.length + (rows.length >= 1000 ? ' 条（已达上限）' : ' 条');
         }
+        // 首次加载或无历史浏览操作时跟随最新；有则保留滚动位置不打断查看
+        if ((!autoScroll || autoScroll.checked) && (following || prevCount === 0)) scrollToLatest();
       } catch (e) { /* 静默失败，不影响规则管理 */ }
     }
     refresh();
