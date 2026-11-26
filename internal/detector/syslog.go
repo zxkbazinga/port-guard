@@ -18,6 +18,7 @@ type SyslogReceiver struct {
 	cfg      *config.Config
 	log      *slog.Logger
 	eng      *Engine
+	mu       sync.Mutex // 串行化 Start / Stop / Restart，避免 wg.Add 与 wg.Wait 竞态
 	conn     *net.UDPConn
 	running  atomic.Bool
 	wg       sync.WaitGroup
@@ -29,14 +30,25 @@ func NewSyslogReceiver(cfg *config.Config, log *slog.Logger, eng *Engine) *Syslo
 }
 
 func (s *SyslogReceiver) Start() error {
-	addr := &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: s.cfg.SyslogPort()}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running.Load() {
+		return nil
+	}
+	return s.startLocked()
+}
+
+// startLocked 在持有 mu 时启动监听。调用方必须持有 mu。
+func (s *SyslogReceiver) startLocked() error {
+	port := s.cfg.SyslogPort()
+	addr := &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: port}
 	conn, err := net.ListenUDP("udp4", addr)
 	if err != nil {
 		return err
 	}
 	s.conn = conn
 	s.running.Store(true)
-	s.log.Info("Syslog 接收已启动", "port", s.cfg.SyslogPort())
+	s.log.Info("Syslog 接收已启动", "port", port)
 
 	s.wg.Add(1)
 	go func() {
@@ -44,6 +56,48 @@ func (s *SyslogReceiver) Start() error {
 		buf := make([]byte, 65535)
 		for {
 			n, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				if s.running.Load() {
+					s.log.Warn("Syslog 读取失败", "err", err)
+				}
+				return
+			}
+			s.received.Add(1)
+			s.parse(string(bytes.TrimSpace(buf[:n])))
+		}
+	}()
+	return nil
+}
+
+// Restart 按当前配置的端口重建 UDP 监听。先在旧端口仍在监听时尝试绑定新端口，
+// 绑定失败则返回错误并保持旧监听不变，便于调用方回滚配置。
+func (s *SyslogReceiver) Restart() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	port := s.cfg.SyslogPort()
+	addr := &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: port}
+	newConn, err := net.ListenUDP("udp4", addr)
+	if err != nil {
+		return err
+	}
+
+	// 新端口绑定成功，先停旧监听再启用新连接。
+	s.running.Store(false)
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+	s.wg.Wait()
+	s.conn = newConn
+	s.running.Store(true)
+	s.log.Info("Syslog 接收端口已更新", "port", port)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		buf := make([]byte, 65535)
+		for {
+			n, _, err := newConn.ReadFromUDP(buf)
 			if err != nil {
 				if s.running.Load() {
 					s.log.Warn("Syslog 读取失败", "err", err)
@@ -151,6 +205,8 @@ func truncate(s string, n int) string {
 }
 
 func (s *SyslogReceiver) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.running.CompareAndSwap(true, false) {
 		return
 	}

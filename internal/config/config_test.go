@@ -72,6 +72,44 @@ func TestSavedConfigWinsOverEnv(t *testing.T) {
 	}
 }
 
+// TestSavedBoolWinsOverEnv 验证三个布尔开关在 Web 关闭后，容器重启不会被
+// ipkg environment 的固定值强制改回（PG_*_ENABLED 漏登记进 envKey 曾导致此问题）。
+func TestSavedBoolWinsOverEnv(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "bool.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	first, err := New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Update(map[string]any{
+		"detection_enabled": false, "ignore_private_ips": false, "login_fail_enabled": false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟容器重启：environment 里三个值仍固定为 1
+	t.Setenv("PG_DETECTION_ENABLED", "1")
+	t.Setenv("PG_IGNORE_PRIVATE_IPS", "1")
+	t.Setenv("PG_LOGIN_FAIL_ENABLED", "1")
+	second, err := New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.DetectionEnabled() {
+		t.Error("已保存的 detection_enabled=false 应优先于环境变量")
+	}
+	if second.IgnorePrivate() {
+		t.Error("已保存的 ignore_private_ips=false 应优先于环境变量")
+	}
+	if second.Thresholds().LoginFailEnabled {
+		t.Error("已保存的 login_fail_enabled=false 应优先于环境变量")
+	}
+}
+
 func TestIsProtected(t *testing.T) {
 	cfg := newTestConfig(t)
 	cases := []struct {
@@ -89,6 +127,33 @@ func TestIsProtected(t *testing.T) {
 		if got := cfg.IsProtected(c.ip); got != c.want {
 			t.Errorf("IsProtected(%s) = %v, want %v", c.ip, got, c.want)
 		}
+	}
+}
+
+func TestGeoMode(t *testing.T) {
+	cfg := newTestConfig(t)
+	if got := cfg.GeoMode(); got != "cn" {
+		t.Fatalf("默认应仅允许中国大陆，got %q", got)
+	}
+	if err := cfg.Update(map[string]any{"geo_mode": "off"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.GeoMode(); got != "off" {
+		t.Errorf("关闭限制失败，got %q", got)
+	}
+	if err := cfg.Update(map[string]any{"geo_mode": "bogus"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.GeoMode(); got != "off" {
+		t.Errorf("未知模式应收敛为 off，got %q", got)
+	}
+}
+
+func TestGeoModeEnv(t *testing.T) {
+	t.Setenv("PG_GEO_MODE", "cn_all")
+	cfg := newTestConfig(t)
+	if got := cfg.GeoMode(); got != "cn_all" {
+		t.Errorf("PG_GEO_MODE 未生效，got %q", got)
 	}
 }
 

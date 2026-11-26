@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/zxkbazinga/port-guard/internal/geoip"
 	"github.com/zxkbazinga/port-guard/internal/store"
 )
 
@@ -36,6 +37,7 @@ type values struct {
 	WindowSeconds      int `json:"window_seconds"`
 	PortScanThreshold  int `json:"port_scan_threshold"`
 	ConnRateThreshold  int `json:"conn_rate_threshold"`
+	ShortConnThreshold int `json:"short_conn_threshold"` // 窗口内"短连接"次数阈值（爆破特征：短时、低流量）
 	AlertCooldown      int `json:"alert_cooldown_seconds"`
 	EventRetentionDays int `json:"event_retention_days"`
 	// 登录爆破检测（来自 NAS / Windows / Ubuntu 转发的安全日志）
@@ -46,6 +48,8 @@ type values struct {
 	ProxyEnabled   bool `json:"proxy_enabled"`
 	ProxyPortStart int  `json:"proxy_port_start"`
 	ProxyPortEnd   int  `json:"proxy_port_end"`
+	// GeoMode 限制转发连接的来源地区：off / cn / cn_all（仅转发端口生效，不影响管理界面）
+	GeoMode string `json:"geo_mode"`
 	// TLS 终结：证书与私钥文件（通过 SSH 放到 /data/certs/ 下即可）
 	TLSCertFile string `json:"tls_cert_file"`
 	TLSKeyFile  string `json:"tls_key_file"`
@@ -66,10 +70,11 @@ func defaults() values {
 		IgnorePrivateIPs:   true,
 		DetectionEnabled:   true, SyslogPort: 5140,
 		WindowSeconds: 60, PortScanThreshold: 8,
-		ConnRateThreshold: 60, AlertCooldown: 300,
+		ConnRateThreshold: 60, ShortConnThreshold: 8, AlertCooldown: 300,
 		EventRetentionDays: 3,
 		LoginFailEnabled:   true, LoginFailThreshold: 3, LoginFailWindow: 300,
 		ProxyEnabled: false, ProxyPortStart: ProxyPortPhysicalMin, ProxyPortEnd: ProxyPortPhysicalMax,
+		GeoMode:     geoip.ModeCN,
 		TLSCertFile: "/data/certs/fullchain.pem", TLSKeyFile: "/data/certs/privkey.pem",
 		CertSyncEnabled: false, CertSyncURL: "", CertSyncCertURL: "", CertSyncKeyURL: "",
 		CertSyncToken: "", CertSyncIntervalSeconds: 3600,
@@ -125,6 +130,8 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.PortScanThreshold)
 	case "conn_rate_threshold":
 		get(raw, &v.ConnRateThreshold)
+	case "short_conn_threshold":
+		get(raw, &v.ShortConnThreshold)
 	case "alert_cooldown_seconds":
 		get(raw, &v.AlertCooldown)
 	case "event_retention_days":
@@ -141,6 +148,8 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.ProxyPortStart)
 	case "proxy_port_end":
 		get(raw, &v.ProxyPortEnd)
+	case "geo_mode":
+		get(raw, &v.GeoMode)
 	case "tls_cert_file":
 		get(raw, &v.TLSCertFile)
 	case "tls_key_file":
@@ -171,17 +180,22 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_WEB_USERNAME":        "web_username",
 		"PG_API_TOKEN":           "api_token",
 		"PG_WHITELIST":           "whitelist",
+		"PG_IGNORE_PRIVATE_IPS":  "ignore_private_ips",
+		"PG_DETECTION_ENABLED":   "detection_enabled",
+		"PG_LOGIN_FAIL_ENABLED":  "login_fail_enabled",
 		"PG_BAN_MINUTES":         "ban_duration_minutes",
 		"PG_SYSLOG_PORT":         "syslog_port",
 		"PG_CONN_FUNC_NAME":      "conn_func_name", // 兼容旧 ipkg 残留变量，忽略
 		"PG_WINDOW_SECONDS":      "window_seconds",
 		"PG_PORT_SCAN_THRESHOLD": "port_scan_threshold", "PG_CONN_RATE_THRESHOLD": "conn_rate_threshold",
+		"PG_SHORT_CONN_THRESHOLD": "short_conn_threshold",
 		"PG_ALERT_COOLDOWN":       "alert_cooldown_seconds",
 		"PG_EVENT_RETENTION_DAYS": "event_retention_days", "PG_WEB_SESSION_HOURS": "web_session_hours",
 		"PG_LOGIN_FAIL_THRESHOLD": "login_fail_threshold", "PG_LOGIN_FAIL_WINDOW": "login_fail_window_seconds",
 		"PG_PROXY_ENABLED":      "proxy_enabled",
 		"PG_PROXY_PORT_START":   "proxy_port_start",
 		"PG_PROXY_PORT_END":     "proxy_port_end",
+		"PG_GEO_MODE":           "geo_mode",
 		"PG_TLS_CERT_FILE":      "tls_cert_file",
 		"PG_TLS_KEY_FILE":       "tls_key_file",
 		"PG_CERT_SYNC_ENABLED":  "cert_sync_enabled",
@@ -206,6 +220,7 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_WEB_USERNAME":       &c.c.WebUsername,
 		"PG_API_TOKEN":          &c.c.APIToken,
 		"PG_WHITELIST":          &c.c.Whitelist,
+		"PG_GEO_MODE":           &c.c.GeoMode,
 		"PG_TLS_CERT_FILE":      &c.c.TLSCertFile,
 		"PG_TLS_KEY_FILE":       &c.c.TLSKeyFile,
 		"PG_CERT_SYNC_URL":      &c.c.CertSyncURL,
@@ -224,6 +239,7 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_WINDOW_SECONDS":       &c.c.WindowSeconds,
 		"PG_PORT_SCAN_THRESHOLD":  &c.c.PortScanThreshold,
 		"PG_CONN_RATE_THRESHOLD":  &c.c.ConnRateThreshold,
+		"PG_SHORT_CONN_THRESHOLD": &c.c.ShortConnThreshold,
 		"PG_ALERT_COOLDOWN":       &c.c.AlertCooldown,
 		"PG_EVENT_RETENTION_DAYS": &c.c.EventRetentionDays,
 		"PG_WEB_SESSION_HOURS":    &c.c.WebSessionHours,
@@ -266,6 +282,9 @@ func (c *Config) normalize() {
 	if c.c.ConnRateThreshold < 1 {
 		c.c.ConnRateThreshold = d.ConnRateThreshold
 	}
+	if c.c.ShortConnThreshold < 1 {
+		c.c.ShortConnThreshold = d.ShortConnThreshold
+	}
 	if c.c.BanDurationMinutes < 0 {
 		c.c.BanDurationMinutes = d.BanDurationMinutes
 	}
@@ -294,6 +313,7 @@ func (c *Config) normalize() {
 	if c.c.ProxyPortEnd < c.c.ProxyPortStart {
 		c.c.ProxyPortEnd = c.c.ProxyPortStart
 	}
+	c.c.GeoMode = geoip.NormalizeMode(c.c.GeoMode)
 	if strings.TrimSpace(c.c.TLSCertFile) == "" {
 		c.c.TLSCertFile = d.TLSCertFile
 	}
@@ -341,6 +361,11 @@ func (c *Config) EventRetentionDays() int {
 	return c.c.EventRetentionDays
 }
 func (c *Config) ProxyEnabled() bool { c.mu.RLock(); defer c.mu.RUnlock(); return c.c.ProxyEnabled }
+func (c *Config) GeoMode() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.c.GeoMode
+}
 
 func (c *Config) TLSFiles() (string, string) {
 	c.mu.RLock()
@@ -382,9 +407,9 @@ func (c *Config) WebSessionHours() int {
 
 // Threshold 返回一次检测所需的全部阈值。
 type Thresholds struct {
-	Window, PortScan, ConnRate, Cooldown int
-	LoginFail, LoginFailWindow           int
-	LoginFailEnabled                     bool
+	Window, PortScan, ConnRate, ShortConn, Cooldown int
+	LoginFail, LoginFailWindow                      int
+	LoginFailEnabled                                bool
 }
 
 func (c *Config) Thresholds() Thresholds {
@@ -393,7 +418,7 @@ func (c *Config) Thresholds() Thresholds {
 	return Thresholds{
 		Window:   c.c.WindowSeconds,
 		PortScan: c.c.PortScanThreshold, ConnRate: c.c.ConnRateThreshold,
-		Cooldown:  c.c.AlertCooldown,
+		ShortConn: c.c.ShortConnThreshold, Cooldown: c.c.AlertCooldown,
 		LoginFail: c.c.LoginFailThreshold, LoginFailWindow: c.c.LoginFailWindow,
 		LoginFailEnabled: c.c.LoginFailEnabled,
 	}

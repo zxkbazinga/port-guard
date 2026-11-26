@@ -68,7 +68,17 @@ func (m *Manager) Start() {
 	m.wg.Add(1)
 	go m.loop()
 	if enabled {
-		go func() { _ = m.SyncNow() }()
+		// 纳入 wg，避免退出时首次拉取仍在执行、在 Stop 后又触发 onUpdate 重载代理。
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			select {
+			case <-m.stop:
+				return
+			default:
+			}
+			_ = m.SyncNow()
+		}()
 	}
 }
 
@@ -122,7 +132,7 @@ func (m *Manager) SyncNow() error {
 	m.runMu.Lock()
 	defer m.runMu.Unlock()
 
-	enabled, jsonURL, certURL, keyURL, token, interval := m.cfg.CertSyncSettings()
+	enabled, jsonURL, certURL, keyURL, token, _ := m.cfg.CertSyncSettings()
 	m.mu.Lock()
 	m.lastTry = time.Now()
 	m.status.Enabled = enabled
@@ -132,10 +142,6 @@ func (m *Manager) SyncNow() error {
 	if !enabled {
 		return fmt.Errorf("证书自动同步未启用")
 	}
-	if interval < 60 {
-		interval = 3600
-	}
-	_ = interval // 间隔由调度循环使用，SyncNow 不做节流。
 
 	var certPEM, keyPEM []byte
 	var err error
@@ -238,6 +244,12 @@ func (m *Manager) apply(certPEM, keyPEM []byte) error {
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil || len(pair.Certificate) == 0 {
 		return fmt.Errorf("证书与私钥不匹配或格式错误: %v", err)
+	}
+	// 拒绝已过期证书：写入后会让所有 HTTPS 转发握手失败，宁可保留旧证书。
+	if leaf, err := x509.ParseCertificate(pair.Certificate[0]); err != nil {
+		return fmt.Errorf("解析证书失败: %w", err)
+	} else if time.Now().After(leaf.NotAfter) {
+		return fmt.Errorf("上游证书已于 %s 过期，拒绝更新", leaf.NotAfter.Format("2006-01-02 15:04:05"))
 	}
 	certFile, keyFile := m.cfg.TLSFiles()
 	if filepath.Clean(certFile) == filepath.Clean(keyFile) {

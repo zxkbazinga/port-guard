@@ -2,6 +2,7 @@
 {{with .}}
 <div class="page-head"><h1>系统配置</h1></div>
 {{if .Saved}}<div class="alert success">配置已保存并生效</div>{{end}}
+{{if .Error}}<div class="alert error">{{.Error}}</div>{{end}}
 <form method="post" action="/config" class="config-form">
 
 <section class="panel">
@@ -50,8 +51,15 @@
     <label class="check"><input type="checkbox" name="proxy_enabled" {{checked .Cfg.proxy_enabled}}> 启用转发代理（默认关闭）</label>
     <label>端口池起始<input type="number" name="proxy_port_start" value="{{.Cfg.proxy_port_start}}" min="22300" max="22349"></label>
     <label>端口池结束<input type="number" name="proxy_port_end" value="{{.Cfg.proxy_port_end}}" min="22300" max="22349"></label>
+    <label>转发来源地区限制
+      <select name="geo_mode">
+        <option value="off" {{if eq .Cfg.geo_mode "off"}}selected{{end}}>不限制</option>
+        <option value="cn" {{if eq .Cfg.geo_mode "cn"}}selected{{end}}>仅中国大陆（默认）</option>
+        <option value="cn_all" {{if eq .Cfg.geo_mode "cn_all"}}selected{{end}}>中国大陆 + 中国香港 + 中国澳门 + 中国台湾</option>
+      </select>
+    </label>
   </div>
-  <p class="hint">端口池是添加转发规则时建议使用的监听端口范围，须在容器已映射的 22300–22349 之内。改这里不影响已建规则。</p>
+  <p class="hint">地区限制按 APNIC 官方分配表离线判断，只作用于转发端口：非允许地区的公网 IP 在建立连接时直接拒绝，转发日志记为「地区限制拒绝」。管理界面 5657、白名单和内网私网地址不受影响，境外访问被拒不会影响你登录配置页。数据随应用编译，不依赖外部查询服务。</p>
 </section>
 
 <section class="panel">
@@ -124,10 +132,12 @@
     <label class="check"><input type="checkbox" name="detection_enabled" {{checked .Cfg.detection_enabled}}> 启用攻击检测</label>
     <label>统计窗口（秒）<input type="number" name="window_seconds" value="{{.Cfg.window_seconds}}" min="10"></label>
     <label>连接频率阈值<input type="number" name="conn_rate_threshold" value="{{.Cfg.conn_rate_threshold}}" min="1"></label>
+    <label>短连接爆破阈值<input type="number" name="short_conn_threshold" value="{{.Cfg.short_conn_threshold}}" min="1"></label>
     <label>端口扫描阈值<input type="number" name="port_scan_threshold" value="{{.Cfg.port_scan_threshold}}" min="1"></label>
     <label>告警冷却（秒）<input type="number" name="alert_cooldown_seconds" value="{{.Cfg.alert_cooldown_seconds}}" min="10"></label>
     <label>日志保留（天）<input type="number" name="event_retention_days" value="{{.Cfg.event_retention_days}}" min="1"></label>
   </div>
+  <p class="hint">短连接爆破：连接建立后 3 秒内传输不足 8KB 就断开（如密码爆破只交换认证包），窗口内达到阈值即封禁。SSH/MySQL/RDP 正常登录后会有持续流量，不受影响。</p>
 </section>
 
 <section class="panel">

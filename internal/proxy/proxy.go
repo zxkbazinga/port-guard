@@ -15,11 +15,20 @@ import (
 
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/detector"
+	"github.com/zxkbazinga/port-guard/internal/geoip"
 	"github.com/zxkbazinga/port-guard/internal/store"
 )
 
 // maxConnRecords 是内存中保留的转发日志上限。
 const maxConnRecords = 1000
+
+// 短连接判定阈值：持续时间与双向传输字节数均低于阈值即视为一次"空连接"。
+// SSH/MySQL/RDP 爆破的典型特征是连上后只交换认证包（数 KB）便断开，
+// 而正常用户在建立连接后会有持续的数据传输或长连接保持。
+const (
+	shortConnMaxDuration = 3 * time.Second
+	shortConnMaxBytes    = 8192
+)
 
 // ConnRecord 是一条最近连接记录。
 type ConnRecord struct {
@@ -37,14 +46,19 @@ type Server struct {
 	cfg   *config.Config
 	log   *slog.Logger
 	eng   *detector.Engine
+	geo   *geoip.Checker
 	store *store.Store
 
 	mu        sync.Mutex
 	listeners map[int]net.Listener // listenPort -> listener
 	closed    map[int]bool         // Reload 时标记旧监听器，避免误报日志
-	records   []ConnRecord
-	localBan  map[string]int64 // IP -> 到期 Unix 秒；本地封禁，不依赖爱快 API
-	running   atomic.Bool
+	// 转发日志用固定容量环形缓冲，避免每条连接都整体复制切片产生 O(n) 拷贝与 GC 压力。
+	recBuf   [maxConnRecords]ConnRecord
+	recHead  int              // 下一条写入的槽位
+	recLen   int              // 当前有效条数
+	recIdx   map[uint64]int   // 记录 ID -> 槽位，供耗时回填 O(1) 定位
+	localBan map[string]int64 // IP -> 到期 Unix 秒；本地封禁，不依赖爱快 API
+	running  atomic.Bool
 
 	total   atomic.Uint64
 	blocked atomic.Uint64
@@ -54,9 +68,14 @@ type Server struct {
 }
 
 func New(cfg *config.Config, log *slog.Logger, eng *detector.Engine, s *store.Store) *Server {
-	return &Server{cfg: cfg, log: log, eng: eng, store: s,
+	geo, err := geoip.New()
+	if err != nil {
+		log.Error("地区限制数据加载失败，转发端口将不按来源地区拦截", "err", err)
+		geo = nil
+	}
+	return &Server{cfg: cfg, log: log, eng: eng, geo: geo, store: s,
 		listeners: make(map[int]net.Listener), closed: make(map[int]bool),
-		localBan: make(map[string]int64)}
+		recIdx: make(map[uint64]int), localBan: make(map[string]int64)}
 }
 
 // Block 本地封禁 IP 指定分钟。由检测告警回调直接调用，不依赖爱快 API。
@@ -239,7 +258,15 @@ func (p *Server) handle(conn net.Conn, f store.Forward) {
 		return
 	}
 
-	// 2) 已封禁 IP：本地封禁表优先（告警回调直接写入），
+	// 2) 来源地区限制：仅对公网 IP 生效；白名单/私网已在上面放行。
+	if srcIP != "" && p.geo != nil && !p.geo.Allows(srcIP, p.cfg.GeoMode()) {
+		p.blocked.Add(1)
+		p.record(start, srcIP, f, backend, "地区限制拒绝", time.Since(start))
+		p.log.Info("代理拦截非允许地区 IP", "ip", srcIP, "listen", f.ListenPort, "mode", p.cfg.GeoMode())
+		return
+	}
+
+	// 3) 已封禁 IP：本地封禁表优先（告警回调直接写入），
 	//    其次查数据库里的封禁记录（手工封禁 / 引擎告警封禁）。
 	if srcIP != "" && p.isLocallyBanned(srcIP) {
 		p.blocked.Add(1)
@@ -256,7 +283,7 @@ func (p *Server) handle(conn net.Conn, f store.Forward) {
 		}
 	}
 
-	// 3) 送检测引擎：连接频率 / 多端口扫描等规则在此判定
+	// 4) 送检测引擎：连接频率 / 多端口扫描等规则在此判定
 	if srcIP != "" {
 		if p.eng.Feed(detector.Observation{
 			Kind: detector.KindConn, IP: srcIP, Port: f.ListenPort, Proto: "tcp",
@@ -298,10 +325,12 @@ func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Fo
 
 	var wg sync.WaitGroup
 	wg.Add(2)
+	var connBytes atomic.Uint64 // 本连接的双向传输字节数，用于短连接判定
 	pump := func(dst, src net.Conn) {
 		defer wg.Done()
 		n, err := io.Copy(dst, src)
 		p.bytes.Add(uint64(n))
+		connBytes.Add(uint64(n))
 		if err != nil {
 			// 任一方向异常时立即关闭两端，避免另一方向的 io.Copy 永久阻塞
 			_ = conn.Close()
@@ -314,7 +343,19 @@ func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Fo
 	go pump(upstream, conn)
 	go pump(conn, upstream)
 	wg.Wait()
-	p.finishRecord(recID, time.Since(start))
+	elapsed := time.Since(start)
+	p.finishRecord(recID, elapsed)
+
+	// 短连接判定：只对公网 IP 生效（白名单/私网在 handle 阶段已放行），
+	// 且检测总开关开启、有源 IP 时才统计。命中后由引擎累计，超阈值再封禁。
+	if srcIP != "" && !p.cfg.IsProtected(srcIP) && p.cfg.DetectionEnabled() &&
+		elapsed < shortConnMaxDuration && connBytes.Load() < shortConnMaxBytes {
+		p.eng.Feed(detector.Observation{
+			Kind: detector.KindShortConn, IP: srcIP, Port: f.ListenPort, Proto: "tcp",
+			Detail: "低流量短连接 " + elapsed.Round(time.Millisecond).String() + " / " +
+				strconv.FormatUint(connBytes.Load(), 10) + "B",
+		})
+	}
 }
 
 // setNoDelay 对 TCP 连接及 TLS 包装下的底层 TCP 连接关闭 Nagle 算法。
@@ -340,15 +381,14 @@ func closeWrite(c net.Conn) {
 }
 
 // record 立即写入一条日志并返回其 ID，便于连接关闭后回填耗时。
+// 环形缓冲写入为 O(1)：覆盖最旧一条时同步清理其 ID 索引。
 func (p *Server) record(start time.Time, ip string, f store.Forward, backend, action string, d time.Duration) uint64 {
 	id := p.recSeq.Add(1)
 	duration := "连接中"
 	if d > 0 {
 		duration = d.Round(time.Millisecond).String()
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.records = append([]ConnRecord{{
+	rec := ConnRecord{
 		ID:       id,
 		Time:     start.Format("2006-01-02 15:04:05"),
 		IP:       ip,
@@ -356,22 +396,27 @@ func (p *Server) record(start time.Time, ip string, f store.Forward, backend, ac
 		Backend:  backend,
 		Action:   action,
 		Duration: duration,
-	}}, p.records...)
-	if len(p.records) > maxConnRecords {
-		p.records = p.records[:maxConnRecords]
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.recLen == maxConnRecords {
+		// 即将覆盖的最旧一条，先从索引移除
+		delete(p.recIdx, p.recBuf[p.recHead].ID)
+	} else {
+		p.recLen++
+	}
+	p.recBuf[p.recHead] = rec
+	p.recIdx[id] = p.recHead
+	p.recHead = (p.recHead + 1) % maxConnRecords
 	return id
 }
 
-// finishRecord 在连接结束后把「连接中」替换为真实耗时。
+// finishRecord 在连接结束后把「连接中」替换为真实耗时（通过 ID 索引 O(1) 定位）。
 func (p *Server) finishRecord(id uint64, d time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for i := range p.records {
-		if p.records[i].ID == id {
-			p.records[i].Duration = d.Round(time.Millisecond).String()
-			return
-		}
+	if slot, ok := p.recIdx[id]; ok {
+		p.recBuf[slot].Duration = d.Round(time.Millisecond).String()
 	}
 }
 
@@ -379,19 +424,25 @@ func (p *Server) finishRecord(id uint64, d time.Duration) {
 func (p *Server) Records(limit int) []ConnRecord {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	n := len(p.records)
+	n := p.recLen
 	if limit > 0 && limit < n {
 		n = limit
 	}
 	out := make([]ConnRecord, n)
-	copy(out, p.records[:n])
+	for i := 0; i < n; i++ {
+		slot := (p.recHead - 1 - i + maxConnRecords) % maxConnRecords
+		out[i] = p.recBuf[slot]
+	}
 	return out
 }
 
 // ClearRecords 手动清空内存中的转发日志。
 func (p *Server) ClearRecords() {
 	p.mu.Lock()
-	p.records = nil
+	p.recBuf = [maxConnRecords]ConnRecord{}
+	p.recHead = 0
+	p.recLen = 0
+	p.recIdx = make(map[uint64]int)
 	p.mu.Unlock()
 }
 

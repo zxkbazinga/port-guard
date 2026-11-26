@@ -51,6 +51,78 @@ func testCertPEM(t *testing.T) (string, string) {
 		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 }
 
+func testExpiredCertPEM(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "expired.example.com"},
+		NotBefore:    time.Now().Add(-48 * time.Hour),
+		NotAfter:     time.Now().Add(-24 * time.Hour), // 已过期
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+}
+
+// TestApplyRejectsExpired 验证上游下发过期证书时拒绝写入、不触发重载，旧证书保持原样。
+func TestApplyRejectsExpired(t *testing.T) {
+	validCert, validKey := testCertPEM(t)
+	expiredCert, expiredKey := testExpiredCertPEM(t)
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "exp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cfg, err := config.New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath := filepath.Join(dir, "certs", "fullchain.pem")
+	keyPath := filepath.Join(dir, "certs", "privkey.pem")
+	if err := cfg.Update(map[string]any{"tls_cert_file": certPath, "tls_key_file": keyPath}); err != nil {
+		t.Fatal(err)
+	}
+	var reloads atomic.Int64
+	m := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), func() { reloads.Add(1) })
+
+	// 先写入一份有效证书
+	if err := m.apply([]byte(validCert), []byte(validKey)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.apply([]byte(expiredCert), []byte(expiredKey)); err == nil {
+		t.Fatal("过期证书应被拒绝")
+	}
+	after, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Error("过期证书不应覆盖已有的有效证书")
+	}
+	if got := reloads.Load(); got != 1 {
+		t.Errorf("过期证书不应触发重载，reloads=%d", got)
+	}
+}
+
 func TestSyncFromJSON(t *testing.T) {
 	certPEM, keyPEM := testCertPEM(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

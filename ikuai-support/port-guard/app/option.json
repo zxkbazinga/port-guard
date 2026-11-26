@@ -102,6 +102,19 @@
     "max": 100000
   },
   {
+    "attrname": "PG_SHORT_CONN_THRESHOLD",
+    "label": {
+      "en": "Short connection brute-force threshold",
+      "zh": "短连接爆破阈值"
+    },
+    "type": "integer",
+    "scope": "environment",
+    "required": false,
+    "default": 8,
+    "min": 1,
+    "max": 100000
+  },
+  {
     "attrname": "PG_WHITELIST",
     "label": {
       "en": "Whitelist CIDRs (comma separated)",
@@ -213,6 +226,17 @@
     "default": 22349,
     "min": 22300,
     "max": 22349
+  },
+  {
+    "attrname": "PG_GEO_MODE",
+    "label": {
+      "en": "Forwarded source region limit: off / cn / cn_all",
+      "zh": "转发来源地区限制：off / cn / cn_all"
+    },
+    "type": "string",
+    "scope": "environment",
+    "required": false,
+    "default": "cn"
   },
   {
     "attrname": "PG_TLS_CERT_FILE",

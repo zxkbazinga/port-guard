@@ -251,7 +251,7 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 		updates[k] = r.FormValue(k) == "on" || r.FormValue(k) == "1"
 	}
 	intKeys := []string{"ban_duration_minutes", "syslog_port", "window_seconds",
-		"port_scan_threshold", "conn_rate_threshold",
+		"port_scan_threshold", "conn_rate_threshold", "short_conn_threshold",
 		"alert_cooldown_seconds", "event_retention_days", "web_session_hours",
 		"login_fail_threshold", "login_fail_window_seconds",
 		"proxy_port_start", "proxy_port_end", "cert_sync_interval_seconds"}
@@ -259,7 +259,7 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.FormValue(k))
 		updates[k] = n
 	}
-	strKeys := []string{"whitelist", "web_username", "api_token", "tls_cert_file", "tls_key_file",
+	strKeys := []string{"whitelist", "geo_mode", "web_username", "api_token", "tls_cert_file", "tls_key_file",
 		"cert_sync_url", "cert_sync_cert_url", "cert_sync_key_url", "cert_sync_token"}
 	for _, k := range strKeys {
 		updates[k] = strings.TrimSpace(r.FormValue(k))
@@ -270,18 +270,28 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 			updates["web_password_hash"] = hash
 		}
 	}
+	oldSyslogPort := s.cfg.SyslogPort()
 	if err := s.cfg.Update(updates); err != nil {
 		s.log.Error("保存配置失败", "err", err)
 	}
+	syslogErr := s.reloadSyslogIfPortChanged(oldSyslogPort)
 	s.engine.Reset()
 	s.reloadProxy()
 	if s.certSync != nil {
 		go func() { _ = s.certSync.SyncNow() }()
 	}
 	s.render(w, "config.html", map[string]any{
-		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Saved": true,
+		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true),
+		"Saved": syslogErr == nil, "Error": errString(syslogErr),
 		"PushCommand": s.pushCommand(),
 	})
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (s *Server) eventsPage(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +335,23 @@ func (s *Server) reloadProxy() {
 	if s.proxySrv != nil {
 		_ = s.proxySrv.Reload()
 	}
+}
+
+// reloadSyslogIfPortChanged 在 Syslog 端口被改动后重建 UDP 监听。
+// 新端口绑定失败时把端口回滚到旧值，避免界面显示"已保存"但实际仍在监听旧端口。
+func (s *Server) reloadSyslogIfPortChanged(oldPort int) error {
+	if s.syslog == nil {
+		return nil
+	}
+	newPort := s.cfg.SyslogPort()
+	if newPort == oldPort {
+		return nil
+	}
+	if err := s.syslog.Restart(); err != nil {
+		_ = s.cfg.Update(map[string]any{"syslog_port": oldPort})
+		return fmt.Errorf("Syslog 端口 %d 绑定失败，已回滚到 %d：%w", newPort, oldPort, err)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -380,7 +407,12 @@ func (s *Server) apiConfigSet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}
+	oldSyslogPort := s.cfg.SyslogPort()
 	if err := s.cfg.Update(payload); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.reloadSyslogIfPortChanged(oldSyslogPort); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return
 	}

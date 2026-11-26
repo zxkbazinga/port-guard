@@ -44,7 +44,9 @@ func TestTemplatesRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, field := range []string{"ban_duration_minutes", "login_fail_enabled", "syslog_port",
-		"proxy_enabled", "proxy_port_start", "proxy_port_end", "tls_cert_file", "tls_key_file",
+		"proxy_enabled", "proxy_port_start", "proxy_port_end", "geo_mode",
+		"仅中国大陆", "中国大陆 + 中国香港 + 中国澳门 + 中国台湾",
+		"tls_cert_file", "tls_key_file",
 		"certFileInput", "keyFileInput", "certUploadBtn", "certStatus",
 		"api_token", "genTokenBtn", "copyPushBtn", "pushCommand", "api/certs/push",
 		"cert_sync_enabled", "cert_sync_url", "cert_sync_interval_seconds",

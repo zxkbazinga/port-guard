@@ -22,6 +22,7 @@ const (
 	KindConn      Kind = iota // 来自串联代理的新建连接
 	KindSyslog                // 来自安全日志的告警
 	KindLoginFail             // 来自 NAS / Windows / Ubuntu 的登录失败日志
+	KindShortConn             // 来自串联代理的连接结束判定：短时、低流量连接（爆破/探测特征）
 )
 
 // Observation 是一次观测。
@@ -39,7 +40,7 @@ type Alert struct {
 	IP       string
 	Port     int
 	Proto    string
-	Rule     string // port_scan / conn_rate / syslog / login_brute
+	Rule     string // port_scan / conn_rate / short_conn / syslog / login_brute
 	Reason   string
 	Detail   string
 	Evidence string
@@ -138,11 +139,14 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 	}
 
 	var result *Alert
-	connCount, loginFails := 0, 0
+	connCount, shortCount, loginFails := 0, 0, 0
 	for node := state.hits.Front(); node != nil; node = node.Next() {
 		h := node.Value.(hit)
-		if h.kind == KindConn {
+		switch h.kind {
+		case KindConn:
 			connCount++
+		case KindShortConn:
+			shortCount++
 		}
 	}
 
@@ -175,6 +179,10 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 		result = &Alert{IP: ip, Rule: "port_scan", Reason: "端口扫描行为",
 			Detail:   "短时间内探测多个不同端口",
 			Evidence: "ports=" + strings.Join(ports, ",") + " (" + strconv.Itoa(len(state.ports)) + ")"}
+	case shortCount >= th.ShortConn:
+		result = &Alert{IP: ip, Rule: "short_conn", Reason: "短连接爆破行为",
+			Detail:   "短时间内多次建立低流量短连接（疑似密码爆破/批量探测）",
+			Evidence: "short_conn=" + strconv.Itoa(shortCount) + "/" + strconv.Itoa(th.ShortConn)}
 	case connCount >= th.ConnRate:
 		result = &Alert{IP: ip, Rule: "conn_rate", Reason: "连接频率异常",
 			Detail:   "窗口内新建连接数超过阈值",

@@ -40,6 +40,126 @@ func testSetup(t *testing.T) (*config.Config, *store.Store, *detector.Engine, *s
 	return cfg, s, eng, log
 }
 
+// remoteAddrConn 用于测试：让 handle 认为连接来自指定公网 IP。
+type remoteAddrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c *remoteAddrConn) RemoteAddr() net.Addr { return c.remote }
+
+// TestRecordRingBuffer 验证环形缓冲的顺序、上限、耗时回填与清空语义。
+func TestRecordRingBuffer(t *testing.T) {
+	cfg, s, eng, log := testSetup(t)
+	p := New(cfg, log, eng, s)
+	f := store.Forward{ListenPort: 22300}
+
+	// 写满并超出容量，验证上限与顺序（最新在前）
+	total := maxConnRecords + 5
+	ids := make([]uint64, total)
+	for i := 0; i < total; i++ {
+		ids[i] = p.record(time.Now(), "1.2.3.4", f, "1.1.1.1:80", "转发", 0)
+	}
+	recs := p.Records(0)
+	if len(recs) != maxConnRecords {
+		t.Fatalf("记录数应为上限 %d，实际 %d", maxConnRecords, len(recs))
+	}
+	if recs[0].ID != ids[total-1] {
+		t.Errorf("第一条应为最新记录 %d，实际 %d", ids[total-1], recs[0].ID)
+	}
+	if recs[len(recs)-1].ID != ids[5] {
+		t.Errorf("最后一条应为第 6 条记录 %d，实际 %d", ids[5], recs[len(recs)-1].ID)
+	}
+
+	// 回填仍有效的记录耗时
+	p.finishRecord(ids[total-1], 1500*time.Millisecond)
+	if got := p.Records(1)[0].Duration; got != "1.5s" {
+		t.Errorf("耗时回填失败，got %q", got)
+	}
+	// 已被覆盖的旧 ID 回填不应影响任何记录
+	p.finishRecord(ids[0], time.Second)
+
+	// limit 限制
+	if got := len(p.Records(10)); got != 10 {
+		t.Errorf("limit=10 应返回 10 条，实际 %d", got)
+	}
+
+	p.ClearRecords()
+	if got := len(p.Records(0)); got != 0 {
+		t.Errorf("清空后应为空，实际 %d", got)
+	}
+}
+
+func TestGeoRestrictionRejectsForeignIP(t *testing.T) {
+	cfg, s, eng, log := testSetup(t)
+	if err := cfg.Update(map[string]any{"geo_mode": "cn"}); err != nil {
+		t.Fatal(err)
+	}
+	p := New(cfg, log, eng, s)
+
+	client, server := net.Pipe()
+	defer client.Close()
+	conn := &remoteAddrConn{Conn: server, remote: &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 55555}}
+	p.handle(conn, store.Forward{ListenPort: 22300, BackendIP: "127.0.0.1", BackendPort: 1})
+
+	records := p.Records(5)
+	if len(records) == 0 || records[0].Action != "地区限制拒绝" {
+		t.Fatalf("期望境外 IP 被地区规则拦截，实际记录：%+v", records)
+	}
+}
+
+// TestShortConnDetectionEndToEnd 模拟公网 IP 反复建立"连上即断、零传输"的连接
+// （爆破/批量探测特征），验证累计达到阈值后由引擎产生 short_conn 告警。
+func TestShortConnDetectionEndToEnd(t *testing.T) {
+	cfg, s, _, log := testSetup(t)
+	if err := cfg.Update(map[string]any{
+		"detection_enabled": true, "geo_mode": "off",
+		"short_conn_threshold": 8, "alert_cooldown_seconds": 300,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var alerts []detector.Alert
+	eng := detector.New(cfg, log, func(a detector.Alert) { alerts = append(alerts, a) })
+
+	// 后端：接受后立即关闭，制造零传输短连接
+	bl, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bl.Close()
+	backendPort := bl.Addr().(*net.TCPAddr).Port
+	go func() {
+		for {
+			c, e := bl.Accept()
+			if e != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	p := New(cfg, log, eng, s)
+	f := store.Forward{ListenPort: 22300, BackendIP: "127.0.0.1", BackendPort: backendPort}
+	src := &net.TCPAddr{IP: net.ParseIP("223.5.5.5"), Port: 40000} // 中国大陆公网 IP，非白名单
+	for i := 0; i < 8; i++ {
+		client, server := net.Pipe()
+		src.Port = 40000 + i
+		conn := &remoteAddrConn{Conn: server, remote: src}
+		_ = client.Close() // 客户端立刻断开 => 零传输短连接
+		p.handle(conn, f)
+	}
+
+	if len(alerts) != 1 {
+		t.Fatalf("期望 1 条短连接告警，实际 %d 条", len(alerts))
+	}
+	if alerts[0].Rule != "short_conn" {
+		t.Fatalf("期望 short_conn，实际 %s", alerts[0].Rule)
+	}
+	if alerts[0].IP != "223.5.5.5" {
+		t.Fatalf("IP 错误: %s", alerts[0].IP)
+	}
+}
+
 func freePort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

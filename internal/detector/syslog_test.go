@@ -3,8 +3,10 @@ package detector
 import (
 	"io"
 	"log/slog"
+	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/zxkbazinga/port-guard/internal/config"
 	"github.com/zxkbazinga/port-guard/internal/store"
@@ -52,6 +54,71 @@ func TestSyslogLoginFailFormats(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSyslogRestartPort 验证端口变化后新端口能接收消息，且失败时旧监听不受影响。
+func TestSyslogRestartPort(t *testing.T) {
+	freePort := func() int {
+		c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		return c.LocalAddr().(*net.UDPAddr).Port
+	}
+	p1, p2 := freePort(), freePort()
+	s, err := store.Open(filepath.Join(t.TempDir(), "restart.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	cfg, _ := config.New(s)
+	if err := cfg.Update(map[string]any{"syslog_port": p1}); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	eng := New(cfg, log, func(a Alert) {})
+	r := NewSyslogReceiver(cfg, log, eng)
+	if err := r.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Stop)
+
+	// 旧端口可收
+	addr1 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p1}
+	c1, err := net.DialUDP("udp4", nil, addr1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = c1.Write([]byte("test"))
+	_ = c1.Close()
+
+	// 改端口并重启
+	if err := cfg.Update(map[string]any{"syslog_port": p2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Stats()["running"]; got != true {
+		t.Fatalf("重启后应为运行中，实际 %v", got)
+	}
+	addr2 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: p2}
+	c2, err := net.DialUDP("udp4", nil, addr2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = c2.Write([]byte("test"))
+	_ = c2.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.Stats()["messages"].(uint64) >= 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("新端口未收到消息，messages=%v", r.Stats()["messages"])
 }
 
 func TestSyslogAttackStillWorks(t *testing.T) {

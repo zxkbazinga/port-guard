@@ -73,6 +73,39 @@ func TestConnRate(t *testing.T) {
 	}
 }
 
+func TestShortConnBruteForce(t *testing.T) {
+	var alerts []Alert
+	eng, _ := testEngine(t, &alerts)
+	now := time.Now()
+	// 默认短连接阈值 8；同一 IP 反复建立低流量短连接，第 8 次触发。
+	for i := 0; i < 8; i++ {
+		eng.Feed(Observation{Kind: KindShortConn, IP: "122.185.44.206", Port: 2222,
+			Proto: "tcp", Detail: "低流量短连接", TS: now.Add(time.Duration(i) * time.Second)})
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("期望 1 条短连接告警，实际 %d", len(alerts))
+	}
+	if alerts[0].Rule != "short_conn" {
+		t.Fatalf("期望 short_conn，实际 %s", alerts[0].Rule)
+	}
+	if alerts[0].IP != "122.185.44.206" {
+		t.Fatalf("IP 错误: %s", alerts[0].IP)
+	}
+}
+
+func TestShortConnIgnoresNormalTraffic(t *testing.T) {
+	var alerts []Alert
+	eng, _ := testEngine(t, &alerts)
+	now := time.Now()
+	// 普通新建连接（KindConn）不应被计为短连接，即使同端口高频也只走 conn_rate。
+	for i := 0; i < 7; i++ {
+		eng.Feed(Observation{Kind: KindConn, IP: "102.220.160.148", Port: 2222, TS: now})
+	}
+	if len(alerts) != 0 {
+		t.Fatalf("普通连接不应触发短连接规则，实际 %d 条", len(alerts))
+	}
+}
+
 func TestPrivateIPIgnored(t *testing.T) {
 	var alerts []Alert
 	eng, _ := testEngine(t, &alerts)
