@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -175,43 +174,36 @@ func (p *Server) loadTLSConfig() (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }
 
-// prepareFrontend 完成入口侧 TLS 握手，并返回握手中的 SNI（作为后端 TLS 的优先 ServerName）。
-// 非 TLS 规则原样返回连接。
-func (p *Server) prepareFrontend(conn net.Conn, f store.Forward, start time.Time, srcIP, backend string) (net.Conn, string, bool) {
+// prepareFrontend 完成入口侧 TLS 握手。非 TLS 规则原样返回连接。
+func (p *Server) prepareFrontend(conn net.Conn, f store.Forward, start time.Time, srcIP, backend string) (net.Conn, bool) {
 	if !f.ListenTLS {
-		return conn, "", true
+		return conn, true
 	}
 	tc, ok := conn.(*tls.Conn)
 	if !ok {
 		p.record(start, srcIP, f, backend, "TLS配置错误", time.Since(start))
 		p.log.Warn("TLS 规则收到非 TLS 连接", "listen", f.ListenPort)
-		return nil, "", false
+		return nil, false
 	}
 	_ = tc.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err := tc.Handshake(); err != nil {
 		p.record(start, srcIP, f, backend, "TLS握手失败", time.Since(start))
 		p.log.Warn("入口 TLS 握手失败", "listen", f.ListenPort, "ip", srcIP, "err", err)
-		return nil, "", false
+		return nil, false
 	}
 	_ = tc.SetReadDeadline(time.Time{})
-	serverName := tc.ConnectionState().ServerName
-	return tc, serverName, true
+	return tc, true
 }
 
-// dialBackend 建立到后端的连接；如规则启用后端 TLS，则用 SNI/后端 IP 发起 TLS。
-func (p *Server) dialBackend(f store.Forward, backend, clientSNI string) (net.Conn, error) {
+// dialBackend 建立到后端的连接；如规则启用后端 TLS，直接用后端 IP 发起 TLS。
+// 内网 HTTPS 多为自签证书且只有 IP、没有域名，因此跳过服务端证书校验，
+// 只借助 TLS 加密链路；ServerName 设为后端 IP 以兼容要求 SNI 的服务端。
+func (p *Server) dialBackend(f store.Forward, backend string) (net.Conn, error) {
 	if !f.BackendTLS {
 		return net.DialTimeout("tcp", backend, 5*time.Second)
 	}
-	serverName := strings.TrimSpace(f.BackendSNI)
-	if serverName == "" {
-		serverName = strings.TrimSpace(clientSNI)
-	}
-	if serverName == "" {
-		serverName = f.BackendIP
-	}
 	return tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", backend,
-		&tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12})
+		&tls.Config{ServerName: f.BackendIP, InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}) // #nosec G402 -- 内网 IP + 自签证书场景
 }
 
 func (p *Server) serve(ln net.Listener, f store.Forward) {
@@ -282,12 +274,12 @@ func (p *Server) handle(conn net.Conn, f store.Forward) {
 }
 
 func (p *Server) forward(conn net.Conn, backend string, srcIP string, f store.Forward, start time.Time, action string) {
-	frontend, clientSNI, ok := p.prepareFrontend(conn, f, start, srcIP, backend)
+	frontend, ok := p.prepareFrontend(conn, f, start, srcIP, backend)
 	if !ok {
 		return
 	}
 	conn = frontend
-	upstream, err := p.dialBackend(f, backend, clientSNI)
+	upstream, err := p.dialBackend(f, backend)
 	if err != nil {
 		p.record(start, srcIP, f, backend, "后端不可达", time.Since(start))
 		p.log.Warn("转发后端不可达", "listen", f.ListenPort, "backend", backend, "err", err)

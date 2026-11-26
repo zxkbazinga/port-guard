@@ -88,14 +88,10 @@
       <button type="button" id="copyPushBtn" class="small">复制推送命令</button>
       <span id="pushCopyResult" class="save-feedback"></span>
     </div>
-    <label class="full push-cmd">填入 Gately「复制后执行」的命令
-      <textarea id="pushCommand" rows="5" readonly spellcheck="false">curl -fsS -X POST \
-  -H "Authorization: Bearer YOUR_API_TOKEN" \
-  -F "cert=@$certFile" \
-  -F "key=@$keyFile" \
-  http://PORT_GUARD_IP:5657/api/certs/push</textarea>
+    <label class="full push-cmd">填入 Gately「复制后执行」的命令（已内嵌真实 Token，单行）
+      <textarea id="pushCommand" rows="3" readonly spellcheck="false">{{.PushCommand}}</textarea>
     </label>
-    <p class="hint">把命令里的 <span class="mono">YOUR_API_TOKEN</span> 换成上面设置的 Token、<span class="mono">PORT_GUARD_IP</span> 换成能访问本应用的地址（Gately 在容器内就填容器可达的 IP）。「生成随机 Token」后请先点本模块「保存」，再复制命令。</p>
+    <p class="hint">命令已是单行，已自动填入当前 Token；只需把 <span class="mono">PORT_GUARD_IP</span> 换成能访问本应用的地址（Gately 在容器内就填容器可达的 IP）。修改 Token 后请点「保存」并刷新本页，命令会自动更新。私钥通过内网传输，请勿用公网明文 HTTP。</p>
   </div>
 
   <div class="cert-sync">
@@ -129,8 +125,6 @@
     <label>统计窗口（秒）<input type="number" name="window_seconds" value="{{.Cfg.window_seconds}}" min="10"></label>
     <label>连接频率阈值<input type="number" name="conn_rate_threshold" value="{{.Cfg.conn_rate_threshold}}" min="1"></label>
     <label>端口扫描阈值<input type="number" name="port_scan_threshold" value="{{.Cfg.port_scan_threshold}}" min="1"></label>
-    <label>SYN Flood 阈值<input type="number" name="syn_flood_threshold" value="{{.Cfg.syn_flood_threshold}}" min="1"></label>
-    <label>UDP Flood 阈值<input type="number" name="udp_flood_threshold" value="{{.Cfg.udp_flood_threshold}}" min="1"></label>
     <label>告警冷却（秒）<input type="number" name="alert_cooldown_seconds" value="{{.Cfg.alert_cooldown_seconds}}" min="10"></label>
     <label>日志保留（天）<input type="number" name="event_retention_days" value="{{.Cfg.event_retention_days}}" min="1"></label>
   </div>

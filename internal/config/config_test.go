@@ -24,7 +24,7 @@ func newTestConfig(t *testing.T) *Config {
 func TestEnvOverrides(t *testing.T) {
 	// 注意：不能在 t.Setenv 之前调用 newTestConfig，因为 New() 会立即 applyEnv
 	t.Setenv("PG_BAN_MINUTES", "45")
-	t.Setenv("PG_SYN_FLOOD_THRESHOLD", "99")
+	t.Setenv("PG_CONN_RATE_THRESHOLD", "99")
 	t.Setenv("PG_LOGIN_FAIL_ENABLED", "0")
 
 	cfg := newTestConfig(t)
@@ -32,8 +32,8 @@ func TestEnvOverrides(t *testing.T) {
 	if got := cfg.BanMinutes(); got != 45 {
 		t.Errorf("PG_BAN_MINUTES: got %d, want 45", got)
 	}
-	if got := cfg.Thresholds().SynFlood; got != 99 {
-		t.Errorf("PG_SYN_FLOOD_THRESHOLD: got %d, want 99", got)
+	if got := cfg.Thresholds().ConnRate; got != 99 {
+		t.Errorf("PG_CONN_RATE_THRESHOLD: got %d, want 99", got)
 	}
 	if cfg.Thresholds().LoginFailEnabled {
 		t.Error("PG_LOGIN_FAIL_ENABLED=0 应关闭登录爆破检测")

@@ -26,23 +26,6 @@
   function setupProxyLogs() {
     var body = document.getElementById('fwdLogBody');
     if (!body) return;
-    var box = document.getElementById('fwdLogBox');
-    var heightInput = document.getElementById('fwdLogHeight');
-    if (box && heightInput) {
-      var saved = Number(localStorage.getItem('pgLogHeight'));
-      var h = Number.isFinite(saved) && saved >= 160 && saved <= 900 ? saved : 380;
-      heightInput.value = h;
-      box.style.height = h + 'px';
-      heightInput.addEventListener('change', function () {
-        var n = Number(heightInput.value);
-        if (!Number.isFinite(n) || n < 160 || n > 900) {
-          n = 380;
-        }
-        heightInput.value = n;
-        box.style.height = n + 'px';
-        localStorage.setItem('pgLogHeight', String(n));
-      });
-    }
     var pause = document.getElementById('fwdLogPause');
     var paused = false;
     if (pause) {
@@ -202,9 +185,10 @@
         tokenInput.value = token;
         tokenInput.type = 'text';
         if (pushCmd) {
-          pushCmd.value = pushCmd.value.replace('YOUR_API_TOKEN', token);
+          pushCmd.value = 'curl -fsS -X POST -H "Authorization: Bearer ' + token +
+            '" -F "cert=@$certFile" -F "key=@$keyFile" http://PORT_GUARD_IP:5657/api/certs/push';
         }
-        showFeedback(pushResult, true, '✓ 已生成，请点「保存」生效');
+        showFeedback(pushResult, true, '✓ 已生成，请点「保存」并刷新页面');
       });
     }
 

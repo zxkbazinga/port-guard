@@ -24,9 +24,9 @@ func testConfig(t *testing.T) *config.Config {
 		t.Fatal(err)
 	}
 	_ = cfg.Update(map[string]any{
-		"window_seconds": 60, "syn_flood_threshold": 5,
+		"window_seconds":      60,
 		"port_scan_threshold": 4, "conn_rate_threshold": 10,
-		"udp_flood_threshold": 10, "alert_cooldown_seconds": 300,
+		"alert_cooldown_seconds": 300,
 	})
 	return cfg
 }
@@ -39,30 +39,12 @@ func testEngine(t *testing.T, alerts *[]Alert) (*Engine, *config.Config) {
 	return eng, cfg
 }
 
-func TestSynFlood(t *testing.T) {
-	var alerts []Alert
-	eng, _ := testEngine(t, &alerts)
-	now := time.Now()
-	for i := 0; i < 5; i++ {
-		eng.Feed(Observation{Kind: KindSYN, IP: "8.8.8.8", Port: 22, TS: now.Add(time.Duration(i) * time.Second)})
-	}
-	if len(alerts) != 1 {
-		t.Fatalf("期望 1 条告警，实际 %d", len(alerts))
-	}
-	if alerts[0].Rule != "syn_flood" {
-		t.Fatalf("期望 syn_flood，实际 %s", alerts[0].Rule)
-	}
-	if alerts[0].IP != "8.8.8.8" {
-		t.Fatalf("IP 错误: %s", alerts[0].IP)
-	}
-}
-
 func TestPortScan(t *testing.T) {
 	var alerts []Alert
 	eng, _ := testEngine(t, &alerts)
 	now := time.Now()
 	for _, port := range []int{22, 80, 443, 8080} {
-		eng.Feed(Observation{Kind: KindSYN, IP: "1.1.1.1", Port: port, TS: now})
+		eng.Feed(Observation{Kind: KindConn, IP: "1.1.1.1", Port: port, TS: now})
 	}
 	if len(alerts) != 1 {
 		t.Fatalf("期望 1 条告警，实际 %d", len(alerts))
@@ -72,12 +54,31 @@ func TestPortScan(t *testing.T) {
 	}
 }
 
+func TestConnRate(t *testing.T) {
+	var alerts []Alert
+	eng, _ := testEngine(t, &alerts)
+	now := time.Now()
+	// conn_rate 阈值 10：第 10 次连接触发
+	for i := 0; i < 10; i++ {
+		eng.Feed(Observation{Kind: KindConn, IP: "8.8.8.8", Port: 22, TS: now.Add(time.Duration(i) * time.Second)})
+	}
+	if len(alerts) != 1 {
+		t.Fatalf("期望 1 条告警，实际 %d", len(alerts))
+	}
+	if alerts[0].Rule != "conn_rate" {
+		t.Fatalf("期望 conn_rate，实际 %s", alerts[0].Rule)
+	}
+	if alerts[0].IP != "8.8.8.8" {
+		t.Fatalf("IP 错误: %s", alerts[0].IP)
+	}
+}
+
 func TestPrivateIPIgnored(t *testing.T) {
 	var alerts []Alert
 	eng, _ := testEngine(t, &alerts)
 	now := time.Now()
 	for i := 0; i < 20; i++ {
-		eng.Feed(Observation{Kind: KindSYN, IP: "192.168.50.10", Port: 22, TS: now})
+		eng.Feed(Observation{Kind: KindConn, IP: "192.168.50.10", Port: 22, TS: now})
 	}
 	if len(alerts) != 0 {
 		t.Fatalf("私网 IP 不应触发封禁，实际 %d 条", len(alerts))
@@ -91,7 +92,7 @@ func TestWhitelistIPIgnored(t *testing.T) {
 	eng.Reset()
 	now := time.Now()
 	for i := 0; i < 20; i++ {
-		eng.Feed(Observation{Kind: KindSYN, IP: "203.0.113.9", Port: 22, TS: now})
+		eng.Feed(Observation{Kind: KindConn, IP: "203.0.113.9", Port: 22, TS: now})
 	}
 	if len(alerts) != 0 {
 		t.Fatalf("白名单 IP 不应触发封禁，实际 %d 条", len(alerts))
@@ -103,10 +104,10 @@ func TestCooldown(t *testing.T) {
 	eng, _ := testEngine(t, &alerts)
 	now := time.Now()
 	for i := 0; i < 5; i++ {
-		eng.Feed(Observation{Kind: KindSYN, IP: "4.4.4.4", Port: 22, TS: now})
+		eng.Feed(Observation{Kind: KindConn, IP: "4.4.4.4", Port: 22, TS: now})
 	}
 	for i := 0; i < 5; i++ {
-		eng.Feed(Observation{Kind: KindSYN, IP: "4.4.4.4", Port: 22, TS: now.Add(time.Second)})
+		eng.Feed(Observation{Kind: KindConn, IP: "4.4.4.4", Port: 22, TS: now.Add(time.Second)})
 	}
 	if len(alerts) != 1 {
 		t.Fatalf("冷却期内应只有 1 条告警，实际 %d", len(alerts))

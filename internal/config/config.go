@@ -34,10 +34,8 @@ type values struct {
 	SyslogPort       int  `json:"syslog_port"` // 接收 NAS / Windows / Ubuntu 安全日志的 UDP 端口
 	// 阈值
 	WindowSeconds      int `json:"window_seconds"`
-	SynFloodThreshold  int `json:"syn_flood_threshold"`
 	PortScanThreshold  int `json:"port_scan_threshold"`
 	ConnRateThreshold  int `json:"conn_rate_threshold"`
-	UDPFloodThreshold  int `json:"udp_flood_threshold"`
 	AlertCooldown      int `json:"alert_cooldown_seconds"`
 	EventRetentionDays int `json:"event_retention_days"`
 	// 登录爆破检测（来自 NAS / Windows / Ubuntu 转发的安全日志）
@@ -67,8 +65,8 @@ func defaults() values {
 		Whitelist:          "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16",
 		IgnorePrivateIPs:   true,
 		DetectionEnabled:   true, SyslogPort: 5140,
-		WindowSeconds: 60, SynFloodThreshold: 30, PortScanThreshold: 8,
-		ConnRateThreshold: 60, UDPFloodThreshold: 80, AlertCooldown: 300,
+		WindowSeconds: 60, PortScanThreshold: 8,
+		ConnRateThreshold: 60, AlertCooldown: 300,
 		EventRetentionDays: 3,
 		LoginFailEnabled:   true, LoginFailThreshold: 3, LoginFailWindow: 300,
 		ProxyEnabled: false, ProxyPortStart: ProxyPortPhysicalMin, ProxyPortEnd: ProxyPortPhysicalMax,
@@ -123,14 +121,10 @@ func apply(v *values, key string, raw json.RawMessage) {
 		get(raw, &v.SyslogPort)
 	case "window_seconds":
 		get(raw, &v.WindowSeconds)
-	case "syn_flood_threshold":
-		get(raw, &v.SynFloodThreshold)
 	case "port_scan_threshold":
 		get(raw, &v.PortScanThreshold)
 	case "conn_rate_threshold":
 		get(raw, &v.ConnRateThreshold)
-	case "udp_flood_threshold":
-		get(raw, &v.UDPFloodThreshold)
 	case "alert_cooldown_seconds":
 		get(raw, &v.AlertCooldown)
 	case "event_retention_days":
@@ -174,15 +168,15 @@ func get(raw json.RawMessage, out any) {
 // 数据库中已显式保存过的键优先，环境变量只作为首次启动的初始值。
 func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 	envKey := map[string]string{
-		"PG_WEB_USERNAME":   "web_username",
-		"PG_API_TOKEN":      "api_token",
-		"PG_WHITELIST":      "whitelist",
-		"PG_BAN_MINUTES":    "ban_duration_minutes",
-		"PG_SYSLOG_PORT":    "syslog_port",
-		"PG_CONN_FUNC_NAME": "conn_func_name", // 兼容旧 ipkg 残留变量，忽略
-		"PG_WINDOW_SECONDS": "window_seconds", "PG_SYN_FLOOD_THRESHOLD": "syn_flood_threshold",
+		"PG_WEB_USERNAME":        "web_username",
+		"PG_API_TOKEN":           "api_token",
+		"PG_WHITELIST":           "whitelist",
+		"PG_BAN_MINUTES":         "ban_duration_minutes",
+		"PG_SYSLOG_PORT":         "syslog_port",
+		"PG_CONN_FUNC_NAME":      "conn_func_name", // 兼容旧 ipkg 残留变量，忽略
+		"PG_WINDOW_SECONDS":      "window_seconds",
 		"PG_PORT_SCAN_THRESHOLD": "port_scan_threshold", "PG_CONN_RATE_THRESHOLD": "conn_rate_threshold",
-		"PG_UDP_FLOOD_THRESHOLD": "udp_flood_threshold", "PG_ALERT_COOLDOWN": "alert_cooldown_seconds",
+		"PG_ALERT_COOLDOWN":       "alert_cooldown_seconds",
 		"PG_EVENT_RETENTION_DAYS": "event_retention_days", "PG_WEB_SESSION_HOURS": "web_session_hours",
 		"PG_LOGIN_FAIL_THRESHOLD": "login_fail_threshold", "PG_LOGIN_FAIL_WINDOW": "login_fail_window_seconds",
 		"PG_PROXY_ENABLED":      "proxy_enabled",
@@ -228,10 +222,8 @@ func (c *Config) applyEnv(stored map[string]json.RawMessage) {
 		"PG_BAN_MINUTES":          &c.c.BanDurationMinutes,
 		"PG_SYSLOG_PORT":          &c.c.SyslogPort,
 		"PG_WINDOW_SECONDS":       &c.c.WindowSeconds,
-		"PG_SYN_FLOOD_THRESHOLD":  &c.c.SynFloodThreshold,
 		"PG_PORT_SCAN_THRESHOLD":  &c.c.PortScanThreshold,
 		"PG_CONN_RATE_THRESHOLD":  &c.c.ConnRateThreshold,
-		"PG_UDP_FLOOD_THRESHOLD":  &c.c.UDPFloodThreshold,
 		"PG_ALERT_COOLDOWN":       &c.c.AlertCooldown,
 		"PG_EVENT_RETENTION_DAYS": &c.c.EventRetentionDays,
 		"PG_WEB_SESSION_HOURS":    &c.c.WebSessionHours,
@@ -268,17 +260,11 @@ func (c *Config) normalize() {
 	if c.c.WindowSeconds < 1 {
 		c.c.WindowSeconds = d.WindowSeconds
 	}
-	if c.c.SynFloodThreshold < 1 {
-		c.c.SynFloodThreshold = d.SynFloodThreshold
-	}
 	if c.c.PortScanThreshold < 1 {
 		c.c.PortScanThreshold = d.PortScanThreshold
 	}
 	if c.c.ConnRateThreshold < 1 {
 		c.c.ConnRateThreshold = d.ConnRateThreshold
-	}
-	if c.c.UDPFloodThreshold < 1 {
-		c.c.UDPFloodThreshold = d.UDPFloodThreshold
 	}
 	if c.c.BanDurationMinutes < 0 {
 		c.c.BanDurationMinutes = d.BanDurationMinutes
@@ -396,18 +382,18 @@ func (c *Config) WebSessionHours() int {
 
 // Threshold 返回一次检测所需的全部阈值。
 type Thresholds struct {
-	Window, SynFlood, PortScan, ConnRate, UDPFlood, Cooldown int
-	LoginFail, LoginFailWindow                               int
-	LoginFailEnabled                                         bool
+	Window, PortScan, ConnRate, Cooldown int
+	LoginFail, LoginFailWindow           int
+	LoginFailEnabled                     bool
 }
 
 func (c *Config) Thresholds() Thresholds {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return Thresholds{
-		Window: c.c.WindowSeconds, SynFlood: c.c.SynFloodThreshold,
+		Window:   c.c.WindowSeconds,
 		PortScan: c.c.PortScanThreshold, ConnRate: c.c.ConnRateThreshold,
-		UDPFlood: c.c.UDPFloodThreshold, Cooldown: c.c.AlertCooldown,
+		Cooldown:  c.c.AlertCooldown,
 		LoginFail: c.c.LoginFailThreshold, LoginFailWindow: c.c.LoginFailWindow,
 		LoginFailEnabled: c.c.LoginFailEnabled,
 	}

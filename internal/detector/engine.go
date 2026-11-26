@@ -19,9 +19,7 @@ import (
 type Kind int
 
 const (
-	KindSYN       Kind = iota // TCP SYN（新建连接尝试）
-	KindUDP                   // UDP 包
-	KindConn                  // 来自串联代理的新建连接
+	KindConn      Kind = iota // 来自串联代理的新建连接
 	KindSyslog                // 来自安全日志的告警
 	KindLoginFail             // 来自 NAS / Windows / Ubuntu 的登录失败日志
 )
@@ -41,7 +39,7 @@ type Alert struct {
 	IP       string
 	Port     int
 	Proto    string
-	Rule     string // syn_flood / port_scan / conn_rate / udp_flood / syslog / login_brute
+	Rule     string // port_scan / conn_rate / syslog / login_brute
 	Reason   string
 	Detail   string
 	Evidence string
@@ -140,17 +138,10 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 	}
 
 	var result *Alert
-	synOnPort, udpCount, connCount, loginFails := 0, 0, 0, 0
+	connCount, loginFails := 0, 0
 	for node := state.hits.Front(); node != nil; node = node.Next() {
 		h := node.Value.(hit)
-		switch h.kind {
-		case KindSYN:
-			if h.port == o.Port {
-				synOnPort++
-			}
-		case KindUDP:
-			udpCount++
-		case KindConn:
+		if h.kind == KindConn {
 			connCount++
 		}
 	}
@@ -176,10 +167,6 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 		result = &Alert{IP: ip, Port: o.Port, Proto: o.Proto, Rule: "login_brute",
 			Reason: "登录爆破行为", Detail: "短时间内多次登录失败",
 			Evidence: "failed=" + strconv.Itoa(loginFails) + "/" + strconv.Itoa(th.LoginFail)}
-	case o.Kind == KindSYN && synOnPort >= th.SynFlood:
-		result = &Alert{IP: ip, Port: o.Port, Proto: "tcp", Rule: "syn_flood",
-			Reason: "SYN Flood 攻击", Detail: "窗口内对同一端口的 SYN 数量异常",
-			Evidence: "syn=" + strconv.Itoa(synOnPort) + "/" + strconv.Itoa(th.SynFlood)}
 	case len(state.ports) >= th.PortScan:
 		ports := make([]string, 0, len(state.ports))
 		for p := range state.ports {
@@ -188,10 +175,6 @@ func (e *Engine) evaluate(ip string, state *ipState, o Observation, th config.Th
 		result = &Alert{IP: ip, Rule: "port_scan", Reason: "端口扫描行为",
 			Detail:   "短时间内探测多个不同端口",
 			Evidence: "ports=" + strings.Join(ports, ",") + " (" + strconv.Itoa(len(state.ports)) + ")"}
-	case udpCount >= th.UDPFlood:
-		result = &Alert{IP: ip, Port: o.Port, Proto: "udp", Rule: "udp_flood",
-			Reason: "UDP Flood 攻击", Detail: "窗口内 UDP 包数量异常",
-			Evidence: "udp=" + strconv.Itoa(udpCount) + "/" + strconv.Itoa(th.UDPFlood)}
 	case connCount >= th.ConnRate:
 		result = &Alert{IP: ip, Rule: "conn_rate", Reason: "连接频率异常",
 			Detail:   "窗口内新建连接数超过阈值",

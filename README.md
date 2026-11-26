@@ -30,7 +30,6 @@
 
 - `conn_rate`：同一 IP 新建连接数 ≥ 60
 - `port_scan`：同一 IP 探测不同端口数 ≥ 8
-- `syn_flood` / `udp_flood`：保留的阈值规则（代理为 TCP 转发，主要用前两条）
 - `login_brute`：同一 IP 登录失败 ≥ 3 次（独立 5 分钟窗口，来自 NAS / Windows / Ubuntu 日志）
 
 同一 IP 告警后有 300 秒冷却期，避免重复封禁。所有阈值都可在 Web 界面调整。登录爆破的日志转发步骤见 [LOG-FORWARDING.md](docs/LOG-FORWARDING.md)。
@@ -124,15 +123,18 @@ Web 界面监听 **5657**、Syslog 监听 UDP **5140**、代理池 **22300–223
 
 > 拉取私钥必须走内网 HTTPS 或可信链路，不要通过公网明文 HTTP 暴露私钥。
 
-3. **添加转发规则**：在 **转发代理** 添加规则，勾选「入口 HTTPS」：
+3. **添加转发规则**：在 **转发代理** 添加规则，「服务类型」选 **HTTPS 网站**：
 
    ```
    监听端口：22301
    后端内网 IP：网关的 LAN IP
    后端端口：443 或网关 HTTP 端口
+   服务类型：HTTPS 网站
    ```
 
-   如果网关期望收到明文 HTTP，就不要勾选「后端 HTTPS」；如果网关期望收到 HTTPS，勾选「后端 HTTPS」，并把「后端 SNI / 域名」填成证书绑定的域名。
+   内网服务收明文就不勾额外选项；内网本身就是 HTTPS（哪怕只有 IP + 自签证书）就勾上「忽略 SSL 证书」，port-guard 会用 HTTPS 连后端且不校验证书，无需域名或 SNI。
+
+> **哪些服务能用 port-guard 的证书？只有 HTTPS 网站**（浏览器 `https://` 访问的网页服务）。MySQL(3306)、Windows 远程桌面 RDP(3389)、SSH(22)、群晖 DSM 的 HTTP(5000) 用的是各自独立的加密协议，客户端不会跟 port-guard 做标准 TLS 握手——这些服务请在「服务类型」选 **普通服务**，由 port-guard 原样透传，加密由数据库/远程桌面/SSH 服务端自己负责。给它们选 HTTPS 会导致握手失败。
 
 4. **爱快端口映射**：域名 443 场景把 **TCP 443** 指向 `本应用IP:22301`。不要把 UDP 443 指到这个 TCP 监听口；UDP 443（QUIC）应直连原网关或关闭。
 
@@ -160,8 +162,6 @@ Web 界面监听 **5657**、Syslog 监听 UDP **5140**、代理池 **22300–223
 | `window_seconds` | 60 | 统计窗口 |
 | `conn_rate_threshold` | 60 | 连接频率阈值 |
 | `port_scan_threshold` | 8 | 端口扫描阈值（不同端口数） |
-| `syn_flood_threshold` | 30 | SYN Flood 阈值 |
-| `udp_flood_threshold` | 80 | UDP Flood 阈值 |
 | `alert_cooldown_seconds` | 300 | 同一 IP 告警冷却时间 |
 | `syslog_port` | 5140 | 登录失败日志接收端口（UDP） |
 | `login_fail_enabled` / `threshold` / `window` | true / 3 / 300 | 登录爆破防护 |
@@ -184,7 +184,7 @@ POST   /api/certs           上传证书 {"cert_pem":"-----BEGIN CERTIFICATE----
 POST   /api/certs/push      脚本推送证书（multipart: cert/key 文件，需 Bearer Token）
 POST   /api/certs/pull      立即按配置拉取一次证书
 GET    /api/forwards        转发规则列表
-POST   /api/forwards        添加转发规则 {"listen_port":22300,"backend_ip":"192.168.1.10","backend_port":22,"label":"NAS SSH"}；HTTPS 终结可加 "listen_tls":true，"backend_tls":true，"backend_sni":"nas.example.com"
+POST   /api/forwards        添加转发规则 {"listen_port":22300,"backend_ip":"192.168.1.10","backend_port":22,"label":"NAS SSH"}；HTTPS 终结可加 "listen_tls":true，"backend_tls":true（后端 HTTPS 且忽略证书校验）
 POST   /api/forwards/{id}/toggle   启停规则
 DELETE /api/forwards/{id}   删除规则
 GET    /api/forwards/logs?limit=1000   转发日志（内存，最多 1000 条）

@@ -76,19 +76,6 @@
     "max": 3600
   },
   {
-    "attrname": "PG_SYN_FLOOD_THRESHOLD",
-    "label": {
-      "en": "SYN flood threshold",
-      "zh": "SYN Flood 阈值"
-    },
-    "type": "integer",
-    "scope": "environment",
-    "required": false,
-    "default": 30,
-    "min": 1,
-    "max": 100000
-  },
-  {
     "attrname": "PG_PORT_SCAN_THRESHOLD",
     "label": {
       "en": "Port scan threshold (distinct ports)",
@@ -111,19 +98,6 @@
     "scope": "environment",
     "required": false,
     "default": 60,
-    "min": 1,
-    "max": 100000
-  },
-  {
-    "attrname": "PG_UDP_FLOOD_THRESHOLD",
-    "label": {
-      "en": "UDP flood threshold",
-      "zh": "UDP Flood 阈值"
-    },
-    "type": "integer",
-    "scope": "environment",
-    "required": false,
-    "default": 80,
     "min": 1,
     "max": 100000
   },

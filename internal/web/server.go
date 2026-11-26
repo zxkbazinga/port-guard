@@ -130,6 +130,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/certs/pull", s.withAuth(s.apiCertPull))
 	s.mux.HandleFunc("GET /api/forwards", s.withAuth(s.apiForwards))
 	s.mux.HandleFunc("POST /api/forwards", s.withAuth(s.apiForwardAdd))
+	s.mux.HandleFunc("POST /api/forwards/{id}", s.withAuth(s.apiForwardUpdate))
 	s.mux.HandleFunc("POST /api/forwards/{id}/toggle", s.withAuth(s.apiForwardToggle))
 	s.mux.HandleFunc("DELETE /api/forwards/{id}", s.withAuth(s.apiForwardDelete))
 	s.mux.HandleFunc("GET /api/forwards/logs", s.withAuth(s.apiForwardLogs))
@@ -175,6 +176,9 @@ func (s *Server) validAPIToken(r *http.Request) bool {
 	}
 	if supplied == "" {
 		supplied = r.Header.Get("X-API-Token")
+	}
+	if supplied == "" {
+		supplied = strings.TrimSpace(r.URL.Query().Get("token"))
 	}
 	return supplied != "" && subtle.ConstantTimeCompare([]byte(supplied), []byte(token)) == 1
 }
@@ -225,7 +229,18 @@ func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) configPage(w http.ResponseWriter, _ *http.Request) {
 	s.render(w, "config.html", map[string]any{
 		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Saved": false,
+		"PushCommand": s.pushCommand(),
 	})
+}
+
+// pushCommand 生成可直接粘贴到 Gately「复制后执行」的单行命令。
+// 这里用真实 Token（页面本身需登录才能访问），避免掩码值被误当作 Token 使用。
+func (s *Server) pushCommand() string {
+	token := s.cfg.APIToken()
+	if token == "" {
+		token = "YOUR_API_TOKEN"
+	}
+	return fmt.Sprintf(`curl -fsS -X POST -H "Authorization: Bearer %s" -F "cert=@$certFile" -F "key=@$keyFile" http://PORT_GUARD_IP:5657/api/certs/push`, token)
 }
 
 func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
@@ -235,8 +250,8 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	for _, k := range boolKeys {
 		updates[k] = r.FormValue(k) == "on" || r.FormValue(k) == "1"
 	}
-	intKeys := []string{"ban_duration_minutes", "syslog_port", "window_seconds", "syn_flood_threshold",
-		"port_scan_threshold", "conn_rate_threshold", "udp_flood_threshold",
+	intKeys := []string{"ban_duration_minutes", "syslog_port", "window_seconds",
+		"port_scan_threshold", "conn_rate_threshold",
 		"alert_cooldown_seconds", "event_retention_days", "web_session_hours",
 		"login_fail_threshold", "login_fail_window_seconds",
 		"proxy_port_start", "proxy_port_end", "cert_sync_interval_seconds"}
@@ -265,6 +280,7 @@ func (s *Server) configSave(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "config.html", map[string]any{
 		"Title": "系统配置", "Cfg": s.cfg.Snapshot(true), "Saved": true,
+		"PushCommand": s.pushCommand(),
 	})
 }
 
@@ -587,37 +603,72 @@ func (s *Server) apiForwards(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, forwards)
 }
 
-func (s *Server) apiForwardAdd(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ListenPort  int    `json:"listen_port"`
-		BackendIP   string `json:"backend_ip"`
-		BackendPort int    `json:"backend_port"`
-		Protocol    string `json:"protocol"`
-		Label       string `json:"label"`
-		ListenTLS   bool   `json:"listen_tls"`
-		BackendTLS  bool   `json:"backend_tls"`
-		BackendSNI  string `json:"backend_sni"`
-	}
+type forwardBody struct {
+	ListenPort  int    `json:"listen_port"`
+	BackendIP   string `json:"backend_ip"`
+	BackendPort int    `json:"backend_port"`
+	Protocol    string `json:"protocol"`
+	Label       string `json:"label"`
+	ListenTLS   bool   `json:"listen_tls"`
+	BackendTLS  bool   `json:"backend_tls"`
+}
+
+// decodeForwardBody 解析并校验转发规则载荷。
+func decodeForwardBody(r *http.Request) (forwardBody, error) {
+	var body forwardBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, 400, map[string]any{"error": "请求格式错误"})
-		return
+		return body, fmt.Errorf("请求格式错误")
 	}
 	if body.ListenPort < 1 || body.ListenPort > 65535 || body.BackendPort < 1 || body.BackendPort > 65535 {
-		writeJSON(w, 400, map[string]any{"error": "端口必须在 1-65535 之间"})
-		return
+		return body, fmt.Errorf("端口必须在 1-65535 之间")
 	}
 	if net.ParseIP(body.BackendIP) == nil {
-		writeJSON(w, 400, map[string]any{"error": "后端 IP 不合法"})
-		return
+		return body, fmt.Errorf("后端 IP 不合法")
 	}
 	if body.Protocol == "" {
 		body.Protocol = "tcp"
+	}
+	return body, nil
+}
+
+func (s *Server) apiForwardAdd(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeForwardBody(r)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
 	}
 	if err := s.store.UpsertForward(store.Forward{
 		ListenPort: body.ListenPort, BackendIP: body.BackendIP, BackendPort: body.BackendPort,
 		Protocol: body.Protocol, Label: body.Label, Enabled: true,
 		ListenTLS: body.ListenTLS, BackendTLS: body.BackendTLS,
-		BackendSNI: strings.TrimSpace(body.BackendSNI),
+	}); err != nil {
+		writeJSON(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	s.reloadProxy()
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) apiForwardUpdate(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	body, err := decodeForwardBody(r)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{"error": err.Error()})
+		return
+	}
+	// 保留原有的启用状态，编辑不改变启停。
+	enabled := true
+	forwards, _ := s.store.ListForwards(false)
+	for _, f := range forwards {
+		if f.ID == id {
+			enabled = f.Enabled
+			break
+		}
+	}
+	if err := s.store.UpdateForward(id, store.Forward{
+		ListenPort: body.ListenPort, BackendIP: body.BackendIP, BackendPort: body.BackendPort,
+		Protocol: body.Protocol, Label: body.Label, Enabled: enabled,
+		ListenTLS: body.ListenTLS, BackendTLS: body.BackendTLS,
 	}); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error()})
 		return

@@ -39,7 +39,7 @@ func TestTemplatesRender(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	if err := srv.tmpl.ExecuteTemplate(&buf, "config.html", map[string]any{
-		"Cfg": cfg.Snapshot(true), "Saved": false,
+		"Cfg": cfg.Snapshot(true), "Saved": false, "PushCommand": srv.pushCommand(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,11 +93,14 @@ func TestTemplatesRender(t *testing.T) {
 	if !strings.Contains(buf.String(), "转发规则") {
 		t.Fatal("代理页缺少转发规则区块")
 	}
-	for _, want := range []string{"转发日志", "清空日志", "复制全部日志", "fwdLogHeight",
-		"fwdListenTLS", "fwdBackendTLS", "入口 HTTPS"} {
+	for _, want := range []string{"转发日志", "清空日志", "复制全部日志",
+		"fwdKind", "fwdTlsOptions", "fwdBackendTLS", "HTTPS 网站", "editFwd", "fwdModalTitle"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("代理页缺少 %q", want)
 		}
+	}
+	if strings.Contains(buf.String(), "fwdLogHeight") {
+		t.Fatal("代理页仍包含已删的框高输入")
 	}
 	if strings.Contains(buf.String(), "从爱快映射导入") {
 		t.Fatal("代理页仍包含已删的爱快导入按钮")
@@ -195,6 +198,14 @@ func TestAPITokenAuth(t *testing.T) {
 	req2.Header.Set("X-API-Token", "wrong")
 	if srv.validAPIToken(req2) {
 		t.Fatal("错误 Token 不应通过")
+	}
+	req3 := httptest.NewRequest(http.MethodGet, "/api/status?token=s3cr3t-token", nil)
+	if !srv.validAPIToken(req3) {
+		t.Fatal("query token 应通过")
+	}
+	if cmd := srv.pushCommand(); !strings.Contains(cmd, "s3cr3t-token") ||
+		strings.Contains(cmd, "\n") {
+		t.Fatalf("推送命令应单行且含真实 Token，实际 %q", cmd)
 	}
 
 	// 掩码后原样提交不覆盖真实 Token

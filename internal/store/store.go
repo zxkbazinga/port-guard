@@ -32,7 +32,6 @@ type Forward struct {
 	UpdatedAt   int64  `json:"updated_at"`
 	ListenTLS   bool   `json:"listen_tls"`
 	BackendTLS  bool   `json:"backend_tls"`
-	BackendSNI  string `json:"backend_sni"`
 }
 
 // Event 是一条检测/封禁事件。
@@ -87,8 +86,7 @@ CREATE TABLE IF NOT EXISTS forwards (
     enabled INTEGER DEFAULT 1,
     updated_at INTEGER DEFAULT 0,
     listen_tls INTEGER DEFAULT 0,
-    backend_tls INTEGER DEFAULT 0,
-    backend_sni TEXT DEFAULT ''
+    backend_tls INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_events_ip ON events(ip);
@@ -156,7 +154,6 @@ func migrateForwards(db *sql.DB) error {
 	migrations := []struct{ name, ddl string }{
 		{"listen_tls", "ALTER TABLE forwards ADD COLUMN listen_tls INTEGER DEFAULT 0"},
 		{"backend_tls", "ALTER TABLE forwards ADD COLUMN backend_tls INTEGER DEFAULT 0"},
-		{"backend_sni", "ALTER TABLE forwards ADD COLUMN backend_sni TEXT DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		if cols[m.name] {
@@ -390,7 +387,7 @@ func (s *Store) ActiveBanCount() (int, error) {
 func (s *Store) ListForwards(enabledOnly bool) ([]Forward, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	query := "SELECT id, listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at, listen_tls, backend_tls, backend_sni FROM forwards"
+	query := "SELECT id, listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at, listen_tls, backend_tls FROM forwards"
 	if enabledOnly {
 		query += " WHERE enabled = 1"
 	}
@@ -406,7 +403,7 @@ func (s *Store) ListForwards(enabledOnly bool) ([]Forward, error) {
 		var enabled, listenTLS, backendTLS int
 		if err := rows.Scan(&f.ID, &f.ListenPort, &f.BackendIP, &f.BackendPort,
 			&f.Protocol, &f.Label, &enabled, &f.UpdatedAt,
-			&listenTLS, &backendTLS, &f.BackendSNI); err != nil {
+			&listenTLS, &backendTLS); err != nil {
 			return nil, err
 		}
 		f.Enabled = enabled == 1
@@ -433,8 +430,8 @@ func (s *Store) UpsertForward(f Forward) error {
 		backendTLS = 1
 	}
 	_, err := s.db.Exec(`
-INSERT INTO forwards(listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at, listen_tls, backend_tls, backend_sni)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO forwards(listen_port, backend_ip, backend_port, protocol, label, enabled, updated_at, listen_tls, backend_tls)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(listen_port) DO UPDATE SET
     backend_ip = excluded.backend_ip,
     backend_port = excluded.backend_port,
@@ -443,10 +440,36 @@ ON CONFLICT(listen_port) DO UPDATE SET
     enabled = excluded.enabled,
     updated_at = excluded.updated_at,
     listen_tls = excluded.listen_tls,
-    backend_tls = excluded.backend_tls,
-    backend_sni = excluded.backend_sni`,
+    backend_tls = excluded.backend_tls`,
 		f.ListenPort, f.BackendIP, f.BackendPort, f.Protocol, f.Label, enabled, time.Now().Unix(),
-		listenTLS, backendTLS, f.BackendSNI)
+		listenTLS, backendTLS)
+	return err
+}
+
+// UpdateForward 按 ID 更新一条转发规则的全部字段（监听端口、后端、TLS 选项）。
+func (s *Store) UpdateForward(id int64, f Forward) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	enabled := 0
+	if f.Enabled {
+		enabled = 1
+	}
+	listenTLS := 0
+	if f.ListenTLS {
+		listenTLS = 1
+	}
+	backendTLS := 0
+	if f.BackendTLS {
+		backendTLS = 1
+	}
+	_, err := s.db.Exec(`
+UPDATE forwards SET
+    listen_port = ?, backend_ip = ?, backend_port = ?, protocol = ?,
+    label = ?, enabled = ?, updated_at = ?,
+    listen_tls = ?, backend_tls = ?
+WHERE id = ?`,
+		f.ListenPort, f.BackendIP, f.BackendPort, f.Protocol, f.Label, enabled, time.Now().Unix(),
+		listenTLS, backendTLS, id)
 	return err
 }
 

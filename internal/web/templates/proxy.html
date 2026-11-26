@@ -13,7 +13,7 @@
   <p class="desc">添加规则后，到爱快把对应服务的端口映射「内网目标」改成 <span class="mono">本应用IP : 监听端口</span>，外网端口保持不变，流量即经过代理。建议监听端口用 <span class="mono">{{.PortStart}}–{{.PortEnd}}</span> 范围内、且容器已映射的端口。</p>
 {{if .Forwards}}
 <table class="table">
-  <thead><tr><th>监听端口</th><th>后端地址</th><th>入口 HTTPS</th><th>后端 HTTPS</th><th>SNI</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
+  <thead><tr><th>监听端口</th><th>后端地址</th><th>入口 HTTPS</th><th>后端 HTTPS</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
   <tbody>
   {{range .Forwards}}
     <tr>
@@ -21,10 +21,10 @@
       <td class="mono">{{.BackendIP}}:{{.BackendPort}}</td>
       <td><span class="badge {{if .ListenTLS}}green{{else}}gray{{end}}">{{if .ListenTLS}}终结{{else}}透传{{end}}</span></td>
       <td><span class="badge {{if .BackendTLS}}green{{else}}gray{{end}}">{{if .BackendTLS}}TLS{{else}}明文{{end}}</span></td>
-      <td class="mono">{{if .BackendSNI}}{{.BackendSNI}}{{else}}-{{end}}</td>
       <td>{{if .Label}}{{.Label}}{{else}}-{{end}}</td>
       <td><span class="badge {{if .Enabled}}green{{else}}gray{{end}}">{{if .Enabled}}启用{{else}}停用{{end}}</span></td>
       <td>
+        <button class="btn small" onclick="editFwd({{.ID}},{{.ListenPort}},'{{.BackendIP}}',{{.BackendPort}},{{.ListenTLS}},{{.BackendTLS}},'{{.Label}}')">编辑</button>
         <button class="btn small" onclick="toggleFwd({{.ID}})">{{if .Enabled}}停用{{else}}启用{{end}}</button>
         <button class="btn small" onclick="deleteFwd({{.ID}})">删除</button>
       </td>
@@ -40,14 +40,13 @@
     <h2>转发日志</h2>
     <div class="section-actions">
       <label class="check"><input type="checkbox" id="fwdLogPause"> 暂停刷新</label>
-      <label class="check">框高 <input type="number" id="fwdLogHeight" min="160" max="900" step="20" value="380" style="width:72px"> px</label>
       <button class="btn small" onclick="copyFwdLogs()">复制全部日志</button>
       <button class="btn small" onclick="clearFwdLogs()">清空日志</button>
       <span id="fwdLogCount" class="save-feedback">0 条</span>
       <span id="fwdCopyResult" class="save-feedback"></span>
     </div>
   </div>
-  <p class="desc">保留最近 <strong>1000</strong> 条转发记录（内存日志，重启后清空），每 3 秒自动刷新，最新的在最上面。日志框带滚动条，可拖拽右下角调整高度，或用上方「框高」输入精确控制；「复制全部日志」会把全部记录复制到剪贴板。</p>
+  <p class="desc">保留最近 <strong>1000</strong> 条转发记录（内存日志，重启后清空），每 3 秒自动刷新，最新的在最上面。日志框带滚动条，可拖拽右下角调整高度；「复制全部日志」会把全部记录复制到剪贴板。</p>
   <div id="fwdLogBox" class="log-box">
     <table class="table log-table">
       <thead><tr><th>时间</th><th>来源 IP</th><th>监听</th><th>后端</th><th>动作</th><th>耗时</th></tr></thead>
@@ -63,39 +62,76 @@
 
 <div id="fwdModal" class="modal" style="display:none">
   <div class="modal-card">
-    <h2>添加转发规则</h2>
+    <h2 id="fwdModalTitle">添加转发规则</h2>
     <label>监听端口（爱快映射到此端口）<input id="fwdListen" type="number" min="1" max="65535" placeholder="2222"></label>
     <label>后端内网 IP<input id="fwdIP" placeholder="192.168.1.100"></label>
     <label>后端端口<input id="fwdPort" type="number" min="1" max="65535" placeholder="443"></label>
-    <label class="check"><input id="fwdListenTLS" type="checkbox"> 入口 HTTPS（用 port-guard 上的证书终结 TLS）</label>
-    <label class="check"><input id="fwdBackendTLS" type="checkbox"> 后端 HTTPS（重新发起 TLS 连接）</label>
-    <label>后端 SNI / 域名（可选）<input id="fwdBackendSNI" placeholder="例如：nas.example.com"></label>
-    <p class="hint">域名场景常见配置：爱快 TCP 443 → 本应用 22301；规则 22301 → 网关内网 443，勾选入口 HTTPS。若网关本身也要求 HTTPS，再勾选后端 HTTPS，并把 SNI 填成证书域名。</p>
+    <label>服务类型
+      <select id="fwdKind" onchange="applyFwdKind()">
+        <option value="tcp">普通服务（MySQL / RDP / SSH / HTTP）—— 原样透传</option>
+        <option value="https">HTTPS 网站 —— 由 port-guard 的证书加密</option>
+      </select>
+    </label>
+    <p id="fwdKindHelp" class="hint"></p>
+    <div id="fwdTlsOptions" style="display:none">
+      <label class="check"><input id="fwdBackendTLS" type="checkbox"> 忽略 SSL 证书（内网 HTTPS 用自签证书时勾选）</label>
+    </div>
     <label>备注（可选）<input id="fwdLabel" placeholder="例如：NAS HTTPS"></label>
     <div class="modal-actions">
       <button class="btn" onclick="hideFwdModal()">取消</button>
-      <button class="primary" onclick="submitFwd()">确认添加</button>
+      <button class="primary" id="fwdSubmitBtn" onclick="submitFwd()">确认添加</button>
     </div>
     <p id="fwdResult" class="hint"></p>
   </div>
 </div>
 
 <script>
-function showFwdModal(){document.getElementById('fwdModal').style.display='flex'}
+let editingFwdId=null;
+function applyFwdKind(){
+  const kind=document.getElementById('fwdKind').value;
+  const isHttps=kind==='https';
+  document.getElementById('fwdTlsOptions').style.display=isHttps?'':'none';
+  document.getElementById('fwdKindHelp').innerHTML=isHttps
+    ? '浏览器用 <span class="mono">https://</span> 访问时选这项：外网这一段由 port-guard 用你的证书加密解密，内网可收明文或 HTTPS。内网 HTTPS 用 IP + 自签证书即可，无需域名或 SNI。'
+    : 'MySQL(3306)、Windows 远程桌面(3389)、SSH、群晖 DSM 的 HTTP(5000) 都选这项：port-guard 原样透传，加密由这些服务自己负责。这类服务不支持用 port-guard 的证书加密，选 HTTPS 会连接失败。';
+  if(!isHttps){document.getElementById('fwdBackendTLS').checked=false}
+}
+function showFwdModal(){editingFwdId=null;resetFwdForm();document.getElementById('fwdModalTitle').textContent='添加转发规则';document.getElementById('fwdSubmitBtn').textContent='确认添加';document.getElementById('fwdModal').style.display='flex'}
 function hideFwdModal(){document.getElementById('fwdModal').style.display='none'}
+function resetFwdForm(){
+  ['fwdListen','fwdIP','fwdPort','fwdLabel'].forEach(function(id){document.getElementById(id).value=''});
+  document.getElementById('fwdKind').value='tcp';
+  document.getElementById('fwdBackendTLS').checked=false;
+  document.getElementById('fwdResult').textContent='';
+  applyFwdKind();
+}
+function editFwd(id,listen,ip,port,listenTLS,backendTLS,label){
+  editingFwdId=id;resetFwdForm();
+  document.getElementById('fwdListen').value=listen;
+  document.getElementById('fwdIP').value=ip;
+  document.getElementById('fwdPort').value=port;
+  document.getElementById('fwdKind').value=listenTLS?'https':'tcp';
+  document.getElementById('fwdBackendTLS').checked=!!backendTLS;
+  document.getElementById('fwdLabel').value=label||'';
+  applyFwdKind();
+  document.getElementById('fwdModalTitle').textContent='编辑转发规则';
+  document.getElementById('fwdSubmitBtn').textContent='确认保存';
+  document.getElementById('fwdModal').style.display='flex';
+}
 async function submitFwd(){
   const listen=parseInt(document.getElementById('fwdListen').value);
   const port=parseInt(document.getElementById('fwdPort').value);
   const ip=document.getElementById('fwdIP').value.trim();
   if(!listen||listen<1||listen>65535){document.getElementById('fwdResult').textContent='请输入有效的监听端口';return}
   if(!port||port<1||port>65535){document.getElementById('fwdResult').textContent='请输入有效的后端端口';return}
+  const isHttps=document.getElementById('fwdKind').value==='https';
   const body={listen_port:listen,backend_ip:ip,backend_port:port,protocol:'tcp',label:document.getElementById('fwdLabel').value.trim(),
-    listen_tls:document.getElementById('fwdListenTLS').checked,
-    backend_tls:document.getElementById('fwdBackendTLS').checked,
-    backend_sni:document.getElementById('fwdBackendSNI').value.trim()};
-  const res=await fetch('/api/forwards',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    listen_tls:isHttps,
+    backend_tls:isHttps&&document.getElementById('fwdBackendTLS').checked};
+  const url=editingFwdId?('/api/forwards/'+editingFwdId):'/api/forwards';
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const data=await res.json();
-  if(res.ok){location.reload()}else{document.getElementById('fwdResult').textContent=data.error||'添加失败'}
+  if(res.ok){location.reload()}else{document.getElementById('fwdResult').textContent=data.error||'保存失败'}
 }
 async function toggleFwd(id){
   const res=await fetch('/api/forwards/'+id+'/toggle',{method:'POST'});

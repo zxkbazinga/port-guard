@@ -233,6 +233,103 @@ func writeTestCert(t *testing.T, dir string) (string, string) {
 	return certPath, keyPath
 }
 
+// writeMismatchedCert 生成一张自签证书，其 SAN 里的 IP 与后端实际监听地址不一致，
+// 用于验证「忽略 SSL 证书」场景下代理确实跳过了证书校验。
+func writeMismatchedCert(t *testing.T, dir string) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "internal-self-signed"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("10.99.99.99")},
+		IsCA:         true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath := filepath.Join(dir, "backend-fullchain.pem")
+	keyPath := filepath.Join(dir, "backend-privkey.pem")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certPath, keyPath
+}
+
+func TestBackendTLSIgnoreCert(t *testing.T) {
+	cfg, s, eng, log := testSetup(t)
+	backendPort := freePort(t)
+	listenPort := freePort(t)
+
+	// 后端 HTTPS 服务：自签证书，SAN 里的 IP 与实际监听地址 127.0.0.1 不一致
+	certFile, keyFile := writeMismatchedCert(t, t.TempDir())
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bl, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", backendPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bl.Close()
+	tlsLn := tls.NewListener(bl, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+	go func() {
+		for {
+			c, err := tlsLn.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				buf := make([]byte, 128)
+				n, _ := c.Read(buf)
+				_, _ = c.Write(buf[:n])
+			}()
+		}
+	}()
+
+	// 入口用普通 TCP 透传，后端启用 TLS；没有后端域名/SNI 可填
+	_ = s.UpsertForward(store.Forward{
+		ListenPort: listenPort, BackendIP: "127.0.0.1", BackendPort: backendPort,
+		Protocol: "tcp", Enabled: true, BackendTLS: true,
+	})
+	p := New(cfg, log, eng, s)
+	if err := p.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", listenPort), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "hello-backend-tls")
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 128)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("后端 HTTPS 自签证书应被忽略，连接却失败: %v", err)
+	}
+	if string(buf[:n]) != "hello-backend-tls" {
+		t.Fatalf("回声不符: %q", string(buf[:n]))
+	}
+}
+
 func TestTLSListenerTermination(t *testing.T) {
 	cfg, s, eng, log := testSetup(t)
 	backendPort := freePort(t)
